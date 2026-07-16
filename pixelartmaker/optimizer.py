@@ -162,7 +162,10 @@ class GreedyOptimizer:
             f'{{"tool_name":"set_pixel","parameters":{{"x":5,"y":3,"color":"dark_purple"}}}}'
             f']}}\n'
             f'or {{"type":"STOP","rationale":"why you are done"}}\n\n'
-            f"Up to {self.max_tool_calls} tool calls per step."
+            f"IMPORTANT: include exactly ONE tool call. It will be evaluated immediately — "
+            f"if it improves the image it is committed and the step ends. "
+            f"If not, it is rolled back and you will be asked again (up to {self.max_tool_calls} attempts). "
+            f"Only output STOP if the image already matches the target well."
         )
 
         if self.history_length > 0 and self._step_history:
@@ -237,15 +240,16 @@ class GreedyOptimizer:
             return None
 
     def step(self, run_dir: str) -> bool:
-        """Execute one optimization step. Returns True if STOP was requested."""
-        self.step_count += 1
-        grid = self.edit_manager.grid
-        image_bytes = render_to_bytes(grid)
-        prompt = self._build_prompt(grid)
+        """Execute one optimization step.
 
-        if self.debug:
-            with open(os.path.join(run_dir, "debug.log"), "a") as f:
-                f.write(f"\n{'='*60}\nSTEP {self.step_count}\n{'='*60}\n{prompt}\n")
+        Each attempt asks the LLM for a single tool call, evaluates it immediately,
+        and commits if it improves the score. The step ends as soon as one attempt
+        is accepted, or after max_tool_calls failed attempts.
+
+        Returns True if STOP was requested.
+        """
+        import random
+        self.step_count += 1
 
         original_bytes = None
         if self.original_image is not None:
@@ -253,102 +257,110 @@ class GreedyOptimizer:
             self.original_image.save(buf, format="PNG")
             original_bytes = buf.getvalue()
 
-        t0 = time.time()
-        try:
-            raw = self._call_llm(prompt, image_bytes, original_bytes=original_bytes)
-        except Exception as e:
-            print(f"[ERROR] Step {self.step_count}: LLM call failed — {e}")
-            return False
+        vlm_mode = not hasattr(self.evaluator, '_model')
 
-        elapsed = time.time() - t0
+        for attempt in range(1, self.max_tool_calls + 1):
+            grid = self.edit_manager.grid
+            image_bytes = render_to_bytes(grid)
+            prompt = self._build_prompt(grid)
 
-        if self.debug:
-            with open(os.path.join(run_dir, "debug.log"), "a") as f:
-                f.write(f"\n--- RESPONSE ---\n{raw}\n")
+            if self.debug:
+                with open(os.path.join(run_dir, "debug.log"), "a") as f:
+                    f.write(f"\n{'='*60}\nSTEP {self.step_count} attempt {attempt}\n{'='*60}\n{prompt}\n")
 
-        parsed = self._parse_response(raw)
-        if parsed is None:
-            snippet = raw[-200:].replace("\n", " ") if raw else "(empty)"
-            print(f"[ERROR] Step {self.step_count}: JSON parse failed. Tail: ...{snippet}")
-            return False
+            t0 = time.time()
+            try:
+                raw = self._call_llm(prompt, image_bytes, original_bytes=original_bytes)
+            except Exception as e:
+                print(f"[ERROR] Step {self.step_count} attempt {attempt}: LLM call failed — {e}")
+                continue
 
-        msg_type = parsed.get("type", "")
+            elapsed = time.time() - t0
 
-        if msg_type == "STOP":
-            if self.verbose:
-                print(f"  Step {self.step_count}: STOP — {parsed.get('rationale', '')}")
-            return True
+            if self.debug:
+                with open(os.path.join(run_dir, "debug.log"), "a") as f:
+                    f.write(f"\n--- RESPONSE ---\n{raw}\n")
 
-        if msg_type != "STEP":
-            print(f"[ERROR] Step {self.step_count}: unknown message type '{msg_type}'. Full parsed: {parsed}")
-            return False
+            parsed = self._parse_response(raw)
+            if parsed is None:
+                snippet = raw[-200:].replace("\n", " ") if raw else "(empty)"
+                print(f"[ERROR] Step {self.step_count} attempt {attempt}: JSON parse failed. Tail: ...{snippet}")
+                continue
 
-        # Execute tool calls
-        tool_calls = parsed.get("tool_calls", [])[:self.max_tool_calls]
-        checkpoint = self.edit_manager.checkpoint()
-        successes = 0
-        for tc in tool_calls:
+            msg_type = parsed.get("type", "")
+
+            if msg_type == "STOP":
+                if self.verbose:
+                    print(f"  Step {self.step_count}: STOP — {parsed.get('rationale', '')}")
+                return True
+
+            if msg_type != "STEP":
+                print(f"[ERROR] Step {self.step_count} attempt {attempt}: unknown type '{msg_type}'")
+                continue
+
+            # Take only the first tool call
+            tool_calls = parsed.get("tool_calls", [])
+            if not tool_calls:
+                print(f"[WARN] Step {self.step_count} attempt {attempt}: no tool calls in response")
+                continue
+
+            tc = tool_calls[0]
+            checkpoint = self.edit_manager.checkpoint()
             result = execute_tool(tc.get("tool_name", ""), tc.get("parameters", {}), self.edit_manager)
-            if result["success"]:
-                successes += 1
+            if not result["success"]:
+                print(f"[ERROR] Step {self.step_count} attempt {attempt}: tool failed — {result.get('error')}")
+                self.edit_manager.rollback(checkpoint)
+                continue
+
+            new_grid = self.edit_manager.grid
+            changed = new_grid.diff(grid)
+            if changed == 0:
+                self.edit_manager.rollback(checkpoint)
+                continue
+
+            new_image = render(new_grid)
+            current_best_frame = self.accepted_frames[-1] if self.accepted_frames else None
+            new_score = self._score(new_image, current_best=current_best_frame)
+
+            change_ratio = changed / grid.data.size
+            penalty = 0.0
+            if change_ratio > self.change_penalty_threshold:
+                penalty = self.change_penalty_weight * (change_ratio - self.change_penalty_threshold)
+            adjusted_score = new_score - penalty
+
+            threshold = 0.5 if vlm_mode else self.current_score
+            accept = adjusted_score > threshold or (self.epsilon > 0 and random.random() < self.epsilon)
+
+            rationale = parsed.get("rationale", "")
+            self._step_history.append(_StepRecord(
+                step=self.step_count,
+                accepted=accept,
+                score_before=self.current_score,
+                score_after=new_score,
+                rationale=rationale[:120],
+            ))
+
+            if accept:
+                self.current_score = new_score
+                self.accepted_frames.append(new_image.copy())
+                new_image.save(os.path.join(run_dir, f"step_{self.step_count:03d}_accepted.png"))
+                if self.verbose:
+                    print(
+                        f"  Step {self.step_count}: ACCEPTED  score {new_score:.4f} "
+                        f"({changed} px changed, attempt {attempt}/{self.max_tool_calls}, {elapsed:.1f}s)"
+                    )
+                return False
             else:
-                print(f"[ERROR] Tool '{tc.get('tool_name')}' failed: {result.get('error')}")
+                new_image.save(os.path.join(run_dir, f"step_{self.step_count:03d}_a{attempt}_rejected.png"))
+                self.edit_manager.rollback(checkpoint)
+                if self.verbose:
+                    print(
+                        f"  Step {self.step_count} attempt {attempt}: rejected  "
+                        f"score {new_score:.4f} vs {self.current_score:.4f} ({elapsed:.1f}s)"
+                    )
 
-        new_grid = self.edit_manager.grid
-        changed = new_grid.diff(grid)
-
-        if changed == 0:
-            self.edit_manager.rollback(checkpoint)
-            if self.verbose:
-                print(f"  Step {self.step_count}: no changes, rolled back")
-            return False
-
-        # Score new grid — pass current best frame so VLM can compare all three
-        new_image = render(new_grid)
-        current_best_frame = self.accepted_frames[-1] if self.accepted_frames else None
-        new_score = self._score(new_image, current_best=current_best_frame)
-
-        # Change penalty
-        change_ratio = changed / grid.data.size
-        penalty = 0.0
-        if change_ratio > self.change_penalty_threshold:
-            penalty = self.change_penalty_weight * (change_ratio - self.change_penalty_threshold)
-        adjusted_score = new_score - penalty
-
-        import random
-        # VLM scorer returns >0.5 if candidate beats current best — use fixed threshold
-        # CLIP scorer returns absolute similarity — compare against accumulated current_score
-        vlm_mode = current_best_frame is not None and not hasattr(self.evaluator, '_model')
-        threshold = 0.5 if vlm_mode else self.current_score
-        accept = adjusted_score > threshold or (self.epsilon > 0 and random.random() < self.epsilon)
-
-        rationale = parsed.get("rationale", "")
-        self._step_history.append(_StepRecord(
-            step=self.step_count,
-            accepted=accept,
-            score_before=self.current_score,
-            score_after=new_score,
-            rationale=rationale[:120],  # cap length so history stays compact
-        ))
-
-        if accept:
-            self.current_score = new_score  # track raw score, penalty only for accept decision
-            self.accepted_frames.append(new_image.copy())
-            new_image.save(os.path.join(run_dir, f"step_{self.step_count:03d}_accepted.png"))
-            if self.verbose:
-                print(
-                    f"  Step {self.step_count}: ACCEPTED  score {new_score:.4f} "
-                    f"({successes}/{len(tool_calls)} tools ok, {changed} px changed, {elapsed:.1f}s)"
-                )
-        else:
-            new_image.save(os.path.join(run_dir, f"step_{self.step_count:03d}_rejected.png"))
-            self.edit_manager.rollback(checkpoint)
-            if self.verbose:
-                print(
-                    f"  Step {self.step_count}: rejected  score {new_score:.4f} vs {self.current_score:.4f} "
-                    f"({elapsed:.1f}s)"
-                )
-
+        if self.verbose:
+            print(f"  Step {self.step_count}: all {self.max_tool_calls} attempts rejected")
         return False
 
     def run(self, max_steps: int, run_dir: str) -> PixelGrid:
