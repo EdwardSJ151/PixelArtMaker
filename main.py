@@ -85,8 +85,21 @@ def main():
     seed_image = Image.open(image_path).convert("RGB")
     print(f"Loaded seed image: {image_path} ({seed_image.size[0]}×{seed_image.size[1]})")
 
-    # Flatten background before palette extraction so halo colors don't claim palette slots
-    palette_source = _flatten_background(seed_image, tolerance=bg_tolerance)[0] if remove_background else seed_image
+    # Flatten + crop background before palette extraction so halo/bg colors don't claim palette slots
+    if remove_background:
+        import numpy as np
+        flat, bg_mask = _flatten_background(seed_image, tolerance=bg_tolerance)
+        fg = ~bg_mask
+        rows = np.any(fg, axis=1)
+        cols = np.any(fg, axis=0)
+        if rows.any():
+            y1 = int(np.argmax(rows));  y2 = int(len(rows) - 1 - np.argmax(rows[::-1]))
+            x1 = int(np.argmax(cols));  x2 = int(len(cols) - 1 - np.argmax(cols[::-1]))
+            palette_source = flat.crop((x1, y1, x2 + 1, y2 + 1))
+        else:
+            palette_source = flat
+    else:
+        palette_source = seed_image
 
     print(f"Provider: {provider} / Model: {model}")
 
@@ -124,6 +137,9 @@ def main():
 
     run_dir = make_run_dir(description)
     print(f"Run directory: {run_dir}")
+
+    palette_source.save(os.path.join(run_dir, "cropped_original.png"))
+    print(f"Cropped original saved → {run_dir}/cropped_original.png")
 
     initial_img = render(grid, cell_size=cell_size)
     initial_img.save(os.path.join(run_dir, "initial.png"))

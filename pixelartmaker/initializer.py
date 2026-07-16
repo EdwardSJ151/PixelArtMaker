@@ -171,6 +171,17 @@ def pixelate(
     locked = None
     if remove_background:
         img, bg_mask = _flatten_background(img, tolerance=bg_tolerance)
+        fg = ~bg_mask
+        rows = np.any(fg, axis=1)
+        cols = np.any(fg, axis=0)
+        if rows.any():
+            y1 = int(np.argmax(rows))
+            y2 = int(len(rows) - 1 - np.argmax(rows[::-1]))
+            x1 = int(np.argmax(cols))
+            x2 = int(len(cols) - 1 - np.argmax(cols[::-1]))
+            img = img.crop((x1, y1, x2 + 1, y2 + 1))
+            bg_mask = bg_mask[y1:y2 + 1, x1:x2 + 1]
+            print(f"[bg] Cropped to foreground bounding box: {img.size[0]}×{img.size[1]} px")
         locked = _downsample_mask(bg_mask, grid_size)
 
     mode = _RESAMPLE_MODES.get(resample, Image.NEAREST)
