@@ -105,8 +105,9 @@ class GreedyOptimizer:
         if self.verbose:
             print(f"Initial score: {self.current_score:.4f}")
 
-    def _score(self, image: Image.Image) -> float:
-        return self.evaluator.score(image, self.description)
+    def _score(self, image: Image.Image, current_best: Image.Image | None = None) -> float:
+        original = self.accepted_frames[0] if self.accepted_frames else None
+        return self.evaluator.score(image, self.description, original=original, current_best=current_best)
 
     def _build_prompt(self, grid: PixelGrid) -> str:
         palette = grid.palette
@@ -259,9 +260,10 @@ class GreedyOptimizer:
                 print(f"  Step {self.step_count}: no changes, rolled back")
             return False
 
-        # Score new grid
+        # Score new grid — pass current best frame so VLM can compare all three
         new_image = render(new_grid)
-        new_score = self._score(new_image)
+        current_best_frame = self.accepted_frames[-1] if self.accepted_frames else None
+        new_score = self._score(new_image, current_best=current_best_frame)
 
         # Change penalty
         change_ratio = changed / grid.data.size
@@ -271,7 +273,11 @@ class GreedyOptimizer:
         adjusted_score = new_score - penalty
 
         import random
-        accept = adjusted_score > self.current_score or (self.epsilon > 0 and random.random() < self.epsilon)
+        # VLM scorer returns >0.5 if candidate beats current best — use fixed threshold
+        # CLIP scorer returns absolute similarity — compare against accumulated current_score
+        vlm_mode = current_best_frame is not None and not hasattr(self.evaluator, '_model')
+        threshold = 0.5 if vlm_mode else self.current_score
+        accept = adjusted_score > threshold or (self.epsilon > 0 and random.random() < self.epsilon)
 
         rationale = parsed.get("rationale", "")
         self._step_history.append(_StepRecord(
