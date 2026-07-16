@@ -74,9 +74,10 @@ def select_grid_size(
             )
             raw = response.choices[0].message.content
 
-        print(f"[grid_size] raw response: {raw!r}")
-
         raw = raw.strip()
+        # Strip <think>...</think> blocks (Qwen reasoning models)
+        import re as _re
+        raw = _re.sub(r"<think>[\s\S]*?</think>", "", raw, flags=_re.IGNORECASE).strip()
         if "```" in raw:
             raw = raw.split("```")[1].strip()
             if raw.startswith("json"):
@@ -95,17 +96,76 @@ def select_grid_size(
 
 
 _RESAMPLE_MODES = {
-    "nearest": Image.NEAREST,
-    "box":     Image.BOX,
-    "lanczos": Image.LANCZOS,
+    "nearest":  Image.NEAREST,
+    "box":      Image.BOX,
+    "lanczos":  Image.LANCZOS,
     "bilinear": Image.BILINEAR,
 }
 
 
-def pixelate(image: Image.Image, grid_size: int, palette: Palette, resample: str = "nearest") -> PixelGrid:
+def _flood_fill_background(pixels: np.ndarray, tolerance: int) -> np.ndarray:
+    """BFS flood-fill from all four corners. Returns bool mask where True = background."""
+    from collections import deque
+    h, w = pixels.shape[:2]
+    corners = [pixels[0, 0], pixels[0, w - 1], pixels[h - 1, 0], pixels[h - 1, w - 1]]
+    bg_color = np.mean(corners, axis=0)
+
+    is_bg = np.zeros((h, w), dtype=bool)
+    visited = np.zeros((h, w), dtype=bool)
+    queue = deque([(0, 0), (0, w - 1), (h - 1, 0), (h - 1, w - 1)])
+
+    while queue:
+        y, x = queue.popleft()
+        if y < 0 or y >= h or x < 0 or x >= w or visited[y, x]:
+            continue
+        visited[y, x] = True
+        if np.sqrt(np.sum((pixels[y, x].astype(float) - bg_color) ** 2)) <= tolerance:
+            is_bg[y, x] = True
+            queue.extend([(y + 1, x), (y - 1, x), (y, x + 1), (y, x - 1)])
+
+    return is_bg
+
+
+def _inpaint_background(image: Image.Image, tolerance: int = 40) -> Image.Image:
+    """Replace background pixels with the nearest foreground (creature) color.
+
+    This eliminates halo/aura artifacts before downsampling by ensuring that
+    gradient edge pixels between the subject and background are filled with
+    the nearest subject color rather than a blend of the two.
+    """
+    from scipy.ndimage import distance_transform_edt
+
+    pixels = np.array(image.convert("RGB"), dtype=np.uint8)
+    is_bg = _flood_fill_background(pixels, tolerance)
+    is_fg = ~is_bg
+
+    if not is_fg.any():
+        print("[WARN] Background removal found no foreground pixels — skipping inpaint")
+        return image
+
+    # For every background pixel, find the nearest foreground pixel and copy its color
+    _, nearest_idx = distance_transform_edt(~is_fg, return_indices=True)
+    result = pixels.copy()
+    result[is_bg] = pixels[nearest_idx[0][is_bg], nearest_idx[1][is_bg]]
+
+    print(f"[inpaint] Replaced {is_bg.sum()} background pixels with nearest foreground color")
+    return Image.fromarray(result)
+
+
+def pixelate(
+    image: Image.Image,
+    grid_size: int,
+    palette: Palette,
+    resample: str = "box",
+    remove_background: bool = False,
+    bg_tolerance: int = 40,
+) -> PixelGrid:
     """Downsample image to grid_size×grid_size and map each pixel to the nearest palette color."""
-    mode = _RESAMPLE_MODES.get(resample, Image.NEAREST)
-    small = image.convert("RGB").resize((grid_size, grid_size), mode)
+    img = image.convert("RGB")
+    if remove_background:
+        img = _inpaint_background(img, tolerance=bg_tolerance)
+    mode = _RESAMPLE_MODES.get(resample, Image.BOX)
+    small = img.resize((grid_size, grid_size), mode)
     pixels = np.array(small)
 
     data = np.zeros((grid_size, grid_size), dtype=np.int32)

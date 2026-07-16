@@ -112,34 +112,41 @@ class GreedyOptimizer:
         palette = grid.palette
         w, h = grid.width, grid.height
 
+        accepted = [r for r in self._step_history if r.accepted]
+        best_score = accepted[-1].score_after if accepted else self.current_score
+
         prompt = (
-            f"You are a pixel art editor working on a {w}×{h} grid.\n"
-            f'Target description: "{self.description}"\n\n'
-            f"The rendered image of the current pixel art grid is attached.\n\n"
-            f"Active palette — use ONLY these color names in tool calls:\n"
+            f"You are a pixel art editor. Grid: {w}×{h}. Step {self.step_count + 1}.\n"
+            f'Goal: "{self.description}"\n\n'
+            f"Current similarity score: {self.current_score:.4f} (best so far: {best_score:.4f}). "
+            f"Higher = closer to the description. Your edits must increase this score to be accepted.\n\n"
+            f"Palette — ONLY use these exact names:\n"
             f"{palette.format_for_prompt()}\n\n"
-            f"CLIP similarity score: {self.current_score:.4f}  (goal: maximize — higher means closer to description)\n\n"
             f"{format_tools_for_prompt()}\n"
-            f"## Instructions\n"
-            f"1. Look at the rendered image and compare it to the description.\n"
-            f"2. Identify pixels or regions that don't match the description.\n"
-            f"3. Make targeted tool calls to improve those areas.\n"
-            f"4. Prefer small, precise edits over large rewrites.\n\n"
-            f"## Response Format\n"
-            f"Respond with ONLY a JSON object:\n\n"
-            f"### STEP — make edits:\n"
-            f'{{"type":"STEP","rationale":"your reasoning","tool_calls":['
+            f"## Rules\n"
+            f"- Make small, targeted edits to areas that don't match the description.\n"
+            f"- Do NOT rewrite large regions — edits that change >{int(self.change_penalty_threshold*100)}% "
+            f"of pixels are penalized.\n"
+            f"- Do NOT repeat approaches that were already rejected.\n\n"
+            f"## Output format — respond with ONLY valid JSON, no other text:\n"
+            f'{{"type":"STEP","rationale":"one sentence why","tool_calls":['
             f'{{"tool_name":"set_pixel","parameters":{{"x":5,"y":3,"color":"dark_purple"}}}}'
-            f']}}\n\n'
-            f"### STOP — when satisfied:\n"
-            f'{{"type":"STOP","rationale":"why you are done"}}\n\n'
-            f"Note: You may use up to {self.max_tool_calls} tool calls per step."
+            f']}}\n'
+            f'or {{"type":"STOP","rationale":"why you are done"}}\n\n'
+            f"Up to {self.max_tool_calls} tool calls per step."
         )
 
         if self.history_length > 0 and self._step_history:
             recent = self._step_history[-self.history_length:]
-            history_lines = "\n".join(f"  {r}" for r in recent)
-            prompt += f"\n\n## Previous Steps (most recent last)\n{history_lines}"
+            accepted_lines = [f"  ✓ Step {r.step} (+{r.score_after - r.score_before:+.4f}): {r.rationale}" for r in recent if r.accepted]
+            rejected_lines = [f"  ✗ Step {r.step} ({r.score_after - r.score_before:+.4f}): {r.rationale}" for r in recent if not r.accepted]
+            history = ""
+            if accepted_lines:
+                history += "Accepted (these worked):\n" + "\n".join(accepted_lines) + "\n"
+            if rejected_lines:
+                history += "Rejected (score dropped — avoid repeating these):\n" + "\n".join(rejected_lines)
+            if history:
+                prompt += f"\n\n## Recent history\n{history.strip()}"
 
         if self.extra_instruction:
             prompt += f"\n\n## Extra Instruction\n{self.extra_instruction}"
@@ -172,8 +179,10 @@ class GreedyOptimizer:
             return response.choices[0].message.content
 
     def _parse_response(self, raw: str) -> dict | None:
-        """Extract JSON from LLM response."""
+        """Extract JSON from LLM response, handling think-tags and markdown fences."""
         raw = raw.strip()
+        # Strip <think>...</think> blocks (Qwen reasoning models)
+        raw = re.sub(r"<think>[\s\S]*?</think>", "", raw, flags=re.IGNORECASE).strip()
         # Strip markdown code fences
         match = re.search(r"```(?:json)?\s*([\s\S]+?)```", raw)
         if match:
@@ -211,7 +220,8 @@ class GreedyOptimizer:
 
         parsed = self._parse_response(raw)
         if parsed is None:
-            print(f"[ERROR] Step {self.step_count}: JSON parse failed. Raw response: {raw!r}")
+            snippet = raw[-200:].replace("\n", " ") if raw else "(empty)"
+            print(f"[ERROR] Step {self.step_count}: JSON parse failed. Tail: ...{snippet}")
             return False
 
         msg_type = parsed.get("type", "")

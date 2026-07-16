@@ -45,8 +45,10 @@ optimizer:
 # CLIP SCORER
 # ─────────────────────────────────────────────────────────────────────────────
 clip:
-  model: ViT-B-32         # open_clip model architecture (e.g. ViT-L-14, ViT-H-14)
-  pretrained: openai      # open_clip pretrained weights tag (e.g. laion2b_s32b_b82k)
+  model: hf-hub:timm/ViT-B-16-SigLIP        # SigLIP B16 — recommended (better on stylized/pixel art)
+  # model: hf-hub:timm/ViT-SO400M-14-SigLIP  # SigLIP SO400M — best quality, slower
+  # model: ViT-B-32                           # classic CLIP — fastest, weakest on pixel art
+  pretrained: ""          # leave empty for hf-hub models; set for standard CLIP (e.g. openai, laion2b_s34b_b79k)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # OUTPUT

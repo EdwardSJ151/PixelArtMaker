@@ -19,7 +19,9 @@ palette:
 
 optimizer:
   max_steps: 30           # total optimization steps to run
-  resample: nearest               # downsampling filter: nearest | box | lanczos | bilinear
+  resample: box                   # downsampling filter: box | nearest | lanczos | bilinear
+  remove_background: true         # inpaint background pixels with nearest foreground color before downsampling
+  bg_tolerance: 40                # color distance tolerance for background flood-fill (0-441)
   grid_size: null         # null = let LLM pick from grid_presets; or force e.g. 32
   grid_presets: [8, 16, 32, 48, 64]   # candidate grid sizes offered to LLM when grid_size is null
   epsilon: 0.0            # probability of accepting a worse step (0.0 = pure greedy)
@@ -30,8 +32,8 @@ optimizer:
   change_penalty_weight: 0.5      # penalty per unit of change_ratio above threshold
 
 clip:
-  model: ViT-B-32         # open_clip model architecture
-  pretrained: openai      # open_clip pretrained weights tag
+  model: hf-hub:timm/ViT-B-16-SigLIP   # SigLIP via open_clip — better than CLIP for stylized images
+  pretrained: ""                         # not used for hf-hub models; set for standard CLIP e.g. openai
 
 output:
   gif_duration_ms: 200    # milliseconds per frame in the progression GIF

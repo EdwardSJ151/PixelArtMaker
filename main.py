@@ -59,6 +59,8 @@ def main():
     max_pixels      = pal_cfg.get("max_pixels", 50_000)
 
     resample                 = opt_cfg.get("resample", "nearest")
+    remove_background        = opt_cfg.get("remove_background", False)
+    bg_tolerance             = opt_cfg.get("bg_tolerance", 40)
     max_steps                = opt_cfg["max_steps"]
     grid_size                = opt_cfg.get("grid_size")
     grid_presets             = opt_cfg.get("grid_presets", [8, 16, 32, 48, 64])
@@ -114,7 +116,8 @@ def main():
             print(f"  {name:<20} {hex_val}")
 
     print(f"\nPixelating to {grid_size}×{grid_size}...")
-    grid = pixelate(seed_image, grid_size, palette, resample=resample)
+    grid = pixelate(seed_image, grid_size, palette, resample=resample,
+                    remove_background=remove_background, bg_tolerance=bg_tolerance)
 
     run_dir = make_run_dir(description)
     print(f"Run directory: {run_dir}")
