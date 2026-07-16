@@ -85,6 +85,7 @@ def main():
     grid_ruler        = harness_cfg.get("grid_ruler", True)
     ascii_with_image  = harness_cfg.get("ascii_with_image", True)
     preview_highlight = harness_cfg.get("preview_highlight", "#FF4444")
+    highlight_changes = harness_cfg.get("highlight_changes", False)
 
     clip_model      = clip_cfg.get("model", "hf-hub:timm/ViT-B-16-SigLIP")
     clip_pretrained = clip_cfg.get("pretrained", "")
@@ -182,6 +183,7 @@ def main():
         grid_ruler=grid_ruler,
         ascii_with_image=ascii_with_image,
         preview_highlight=preview_highlight,
+        highlight_changes=highlight_changes,
     )
     optimizer.initialize(grid, original_image=palette_source, used_alpha_removal=used_alpha_removal)
 

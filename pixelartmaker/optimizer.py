@@ -59,6 +59,7 @@ class GreedyOptimizer:
         grid_ruler: bool = True,
         ascii_with_image: bool = True,
         preview_highlight: str = "#FF4444",
+        highlight_changes: bool = False,
     ):
         self.description = description
         self.provider = provider
@@ -79,6 +80,7 @@ class GreedyOptimizer:
         self.grid_ruler = grid_ruler
         self.ascii_with_image = ascii_with_image
         self.preview_highlight = preview_highlight
+        self.highlight_changes = highlight_changes
 
         self._client = make_client(provider, base_url)
         self.edit_manager: EditManager | None = None
@@ -405,10 +407,16 @@ class GreedyOptimizer:
                 rationale=rationale[:120],
             ))
 
+            if self.highlight_changes:
+                affected = self._diff_cells(checkpoint, new_grid)
+                hl_image = render_preview(new_grid, affected)
+
             if accept:
                 self.current_score = new_score
                 self.accepted_frames.append(new_image.copy())
                 new_image.save(os.path.join(run_dir, f"step_{self.step_count:03d}_accepted.png"))
+                if self.highlight_changes:
+                    hl_image.save(os.path.join(run_dir, f"step_{self.step_count:03d}_accepted_hl.png"))
                 with open(os.path.join(run_dir, "generator.log"), "a") as f:
                     f.write(f"→ ACCEPTED  score {new_score:.4f}  changed={changed}px\n")
                 if self.verbose:
@@ -419,6 +427,8 @@ class GreedyOptimizer:
                 return False
             else:
                 new_image.save(os.path.join(run_dir, f"step_{self.step_count:03d}_a{attempt}_rejected.png"))
+                if self.highlight_changes:
+                    hl_image.save(os.path.join(run_dir, f"step_{self.step_count:03d}_a{attempt}_rejected_hl.png"))
                 self.edit_manager.rollback(checkpoint)
                 with open(os.path.join(run_dir, "generator.log"), "a") as f:
                     f.write(f"→ REJECTED  score {new_score:.4f} vs {self.current_score:.4f}\n")

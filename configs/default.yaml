@@ -46,5 +46,6 @@ output:
 debug: false              # write debug.log with full prompts and raw LLM responses
 
 harness:
-  mode: vlm           # vlm | ascii | ascii+vlm | preview
-  grid_ruler: true    # draw coordinate rulers on the rendered image (vlm and ascii+vlm modes)
+  mode: vlm               # vlm | ascii | ascii+vlm | preview
+  grid_ruler: true        # draw coordinate rulers on the rendered image (vlm and ascii+vlm modes)
+  highlight_changes: true # save an extra *_hl.png per step with changed pixels outlined in red

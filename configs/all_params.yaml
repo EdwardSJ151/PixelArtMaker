@@ -79,3 +79,4 @@ harness:
   grid_ruler: true             # vlm/ascii+vlm: bake col/row coordinate rulers into image margins
   ascii_with_image: true       # ascii mode: also send the image alongside the text grid
   preview_highlight: "#FF4444" # preview mode: border color for highlighted cells
+  highlight_changes: false     # save an extra *_hl.png per step with changed pixels outlined in red
