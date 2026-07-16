@@ -1,0 +1,58 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# INPUT
+# ─────────────────────────────────────────────────────────────────────────────
+image: "creature.png"                  # path to seed image (any PIL-readable format)
+description: "purple floating demon cyclops with horns"  # text the LLM and CLIP optimize toward
+extra_instruction: ""                  # raw text appended to every LLM prompt (no parsing/enforcement)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LLM
+# ─────────────────────────────────────────────────────────────────────────────
+llm:
+  provider: openai        # openai | gemini | vllm
+  model: gpt-4o           # model name passed to the provider (e.g. gemini-2.5-flash, Qwen2-VL-7B-Instruct)
+  base_url: null          # vllm only: endpoint URL, e.g. http://localhost:8000/v1
+  temperature: 0.7        # sampling temperature — lower = more deterministic
+  max_tokens: 4096        # max tokens in each LLM response
+  image_detail: low       # low | high | auto — OpenAI/vLLM vision quality (Gemini ignores this)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PALETTE
+# ─────────────────────────────────────────────────────────────────────────────
+palette:
+  size: 16                # number of colors to extract via k-means (ignored when system is set)
+  system: null            # use a fixed system palette instead: pico8 | cga  (nes/snes/gameboy are stubs)
+  kmeans_n_init: 10       # how many times k-means reruns with different seeds — higher = more stable, slower
+  kmeans_seed: 42         # random seed for k-means and pixel sampling — change for different color layouts
+  max_pixels: 100000       # pixels sampled from the image before k-means — lower = faster but less accurate
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OPTIMIZER
+# ─────────────────────────────────────────────────────────────────────────────
+optimizer:
+  max_steps: 30                    # total number of LLM refinement steps to run
+  grid_size: null                  # null = LLM picks from grid_presets; set a number to force (e.g. 32)
+  grid_presets: [8, 16, 32, 48, 64]  # candidate grid sizes offered to the LLM when grid_size is null
+  epsilon: 0.0                     # probability of accepting a worse step — 0 = pure greedy, >0 = exploration
+  cell_size: 16                    # pixels per grid cell in saved PNG/GIF output
+  max_tool_calls: 30               # max tool calls the LLM can make in a single step
+  change_penalty_threshold: 0.4    # fraction of pixels that can change before a score penalty applies
+  change_penalty_weight: 0.5       # how much to penalize per unit of change above the threshold
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CLIP SCORER
+# ─────────────────────────────────────────────────────────────────────────────
+clip:
+  model: ViT-B-32         # open_clip model architecture (e.g. ViT-L-14, ViT-H-14)
+  pretrained: openai      # open_clip pretrained weights tag (e.g. laion2b_s32b_b82k)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OUTPUT
+# ─────────────────────────────────────────────────────────────────────────────
+output:
+  gif_duration_ms: 200    # milliseconds per frame in the progression GIF
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DEBUG
+# ─────────────────────────────────────────────────────────────────────────────
+debug: false              # true = write debug.log with full prompts and raw LLM responses per step
