@@ -101,8 +101,7 @@ class GreedyOptimizer:
             print(f"Initial score: {self.current_score:.4f}")
 
     def _score(self, image: Image.Image, current_best: Image.Image | None = None) -> float:
-        original = self.accepted_frames[0] if self.accepted_frames else None
-        return self.evaluator.score(image, self.description, original=original, current_best=current_best)
+        return self.evaluator.score(image, self.description, original=self.original_image, current_best=current_best)
 
     def _build_prompt(self, grid: PixelGrid, ascii_grid: str | None = None) -> str:
         palette = grid.palette
