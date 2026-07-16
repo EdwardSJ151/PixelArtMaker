@@ -31,11 +31,13 @@ palette:
 # ─────────────────────────────────────────────────────────────────────────────
 optimizer:
   max_steps: 30                    # total number of LLM refinement steps to run
+  resample: nearest                # filter used to shrink the seed image: nearest | box | lanczos | bilinear
   grid_size: null                  # null = LLM picks from grid_presets; set a number to force (e.g. 32)
   grid_presets: [8, 16, 32, 48, 64]  # candidate grid sizes offered to the LLM when grid_size is null
   epsilon: 0.0                     # probability of accepting a worse step — 0 = pure greedy, >0 = exploration
   cell_size: 16                    # pixels per grid cell in saved PNG/GIF output
   max_tool_calls: 30               # max tool calls the LLM can make in a single step
+  history_length: 5                # past steps summarized and injected into each prompt (0 = disabled)
   change_penalty_threshold: 0.4    # fraction of pixels that can change before a score penalty applies
   change_penalty_weight: 0.5       # how much to penalize per unit of change above the threshold
 

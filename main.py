@@ -58,6 +58,7 @@ def main():
     kmeans_seed     = pal_cfg.get("kmeans_seed", 42)
     max_pixels      = pal_cfg.get("max_pixels", 50_000)
 
+    resample                 = opt_cfg.get("resample", "nearest")
     max_steps                = opt_cfg["max_steps"]
     grid_size                = opt_cfg.get("grid_size")
     grid_presets             = opt_cfg.get("grid_presets", [8, 16, 32, 48, 64])
@@ -66,6 +67,7 @@ def main():
     max_tool_calls           = opt_cfg.get("max_tool_calls", 30)
     change_penalty_threshold = opt_cfg.get("change_penalty_threshold", 0.4)
     change_penalty_weight    = opt_cfg.get("change_penalty_weight", 0.5)
+    history_length           = opt_cfg.get("history_length", 0)
 
     clip_model     = clip_cfg.get("model", "ViT-B-32")
     clip_pretrained = clip_cfg.get("pretrained", "openai")
@@ -112,7 +114,7 @@ def main():
             print(f"  {name:<20} {hex_val}")
 
     print(f"\nPixelating to {grid_size}×{grid_size}...")
-    grid = pixelate(seed_image, grid_size, palette)
+    grid = pixelate(seed_image, grid_size, palette, resample=resample)
 
     run_dir = make_run_dir(description)
     print(f"Run directory: {run_dir}")
@@ -140,6 +142,7 @@ def main():
         max_tool_calls=max_tool_calls,
         change_penalty_threshold=change_penalty_threshold,
         change_penalty_weight=change_penalty_weight,
+        history_length=history_length,
     )
     optimizer.initialize(grid)
 

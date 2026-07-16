@@ -48,6 +48,7 @@ def select_grid_size(
         f'Reply with ONLY valid JSON: {{"grid_size": {default_size}, "reason": "one sentence"}}'
     )
 
+    raw = ""
     try:
         buf = io.BytesIO()
         image.save(buf, format="PNG")
@@ -64,7 +65,7 @@ def select_grid_size(
             b64 = base64.b64encode(image_bytes).decode("utf-8")
             content = [
                 {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "low"}},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
             ]
             response = client.chat.completions.create(
                 model=model,
@@ -73,7 +74,8 @@ def select_grid_size(
             )
             raw = response.choices[0].message.content
 
-        # Parse JSON from response
+        print(f"[grid_size] raw response: {raw!r}")
+
         raw = raw.strip()
         if "```" in raw:
             raw = raw.split("```")[1].strip()
@@ -85,13 +87,25 @@ def select_grid_size(
         print(f"Grid size selected: {size}×{size} — {data.get('reason', '')}")
         return size
     except Exception as e:
-        print(f"Grid size selection failed ({e}), defaulting to {default_size}×{default_size}")
+        print(f"[ERROR] Grid size selection failed: {e}")
+        if raw:
+            print(f"[ERROR] Raw LLM response was: {raw!r}")
+        print(f"[ERROR] Defaulting to {default_size}×{default_size}")
         return default_size
 
 
-def pixelate(image: Image.Image, grid_size: int, palette: Palette) -> PixelGrid:
+_RESAMPLE_MODES = {
+    "nearest": Image.NEAREST,
+    "box":     Image.BOX,
+    "lanczos": Image.LANCZOS,
+    "bilinear": Image.BILINEAR,
+}
+
+
+def pixelate(image: Image.Image, grid_size: int, palette: Palette, resample: str = "nearest") -> PixelGrid:
     """Downsample image to grid_size×grid_size and map each pixel to the nearest palette color."""
-    small = image.convert("RGB").resize((grid_size, grid_size), Image.LANCZOS)
+    mode = _RESAMPLE_MODES.get(resample, Image.NEAREST)
+    small = image.convert("RGB").resize((grid_size, grid_size), mode)
     pixels = np.array(small)
 
     data = np.zeros((grid_size, grid_size), dtype=np.int32)

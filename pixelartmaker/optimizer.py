@@ -17,6 +17,24 @@ from .grid import PixelGrid
 from .renderer import render, render_to_bytes
 from .tools import TOOL_SPECS, execute_tool, format_tools_for_prompt
 
+class _StepRecord:
+    __slots__ = ("step", "accepted", "score_before", "score_after", "rationale")
+
+    def __init__(self, step: int, accepted: bool, score_before: float, score_after: float, rationale: str):
+        self.step = step
+        self.accepted = accepted
+        self.score_before = score_before
+        self.score_after = score_after
+        self.rationale = rationale
+
+    def __str__(self) -> str:
+        status = "ACCEPTED" if self.accepted else "REJECTED"
+        return (
+            f"Step {self.step} ({status}, {self.score_before:.4f} → {self.score_after:.4f}): "
+            f"{self.rationale}"
+        )
+
+
 class GreedyOptimizer:
     def __init__(
         self,
@@ -35,6 +53,7 @@ class GreedyOptimizer:
         max_tool_calls: int = 30,
         change_penalty_threshold: float = 0.4,
         change_penalty_weight: float = 0.5,
+        history_length: int = 0,
     ):
         self.description = description
         self.provider = provider
@@ -50,9 +69,11 @@ class GreedyOptimizer:
         self.max_tool_calls = max_tool_calls
         self.change_penalty_threshold = change_penalty_threshold
         self.change_penalty_weight = change_penalty_weight
+        self.history_length = history_length
 
         self._client = self._init_client(provider, model, base_url)
         self.edit_manager: EditManager | None = None
+        self._step_history: list[_StepRecord] = []
         self.current_score: float = float("-inf")
         self.step_count = 0
         self.accepted_frames: list[Image.Image] = []
@@ -115,6 +136,11 @@ class GreedyOptimizer:
             f"Note: You may use up to {self.max_tool_calls} tool calls per step."
         )
 
+        if self.history_length > 0 and self._step_history:
+            recent = self._step_history[-self.history_length:]
+            history_lines = "\n".join(f"  {r}" for r in recent)
+            prompt += f"\n\n## Previous Steps (most recent last)\n{history_lines}"
+
         if self.extra_instruction:
             prompt += f"\n\n## Extra Instruction\n{self.extra_instruction}"
 
@@ -174,7 +200,7 @@ class GreedyOptimizer:
         try:
             raw = self._call_llm(prompt, image_bytes)
         except Exception as e:
-            print(f"  Step {self.step_count}: LLM error — {e}")
+            print(f"[ERROR] Step {self.step_count}: LLM call failed — {e}")
             return False
 
         elapsed = time.time() - t0
@@ -185,7 +211,7 @@ class GreedyOptimizer:
 
         parsed = self._parse_response(raw)
         if parsed is None:
-            print(f"  Step {self.step_count}: parse error")
+            print(f"[ERROR] Step {self.step_count}: JSON parse failed. Raw response: {raw!r}")
             return False
 
         msg_type = parsed.get("type", "")
@@ -196,7 +222,7 @@ class GreedyOptimizer:
             return True
 
         if msg_type != "STEP":
-            print(f"  Step {self.step_count}: unknown message type '{msg_type}'")
+            print(f"[ERROR] Step {self.step_count}: unknown message type '{msg_type}'. Full parsed: {parsed}")
             return False
 
         # Execute tool calls
@@ -207,6 +233,8 @@ class GreedyOptimizer:
             result = execute_tool(tc.get("tool_name", ""), tc.get("parameters", {}), self.edit_manager)
             if result["success"]:
                 successes += 1
+            else:
+                print(f"[ERROR] Tool '{tc.get('tool_name')}' failed: {result.get('error')}")
 
         new_grid = self.edit_manager.grid
         changed = new_grid.diff(grid)
@@ -230,6 +258,15 @@ class GreedyOptimizer:
 
         import random
         accept = adjusted_score > self.current_score or (self.epsilon > 0 and random.random() < self.epsilon)
+
+        rationale = parsed.get("rationale", "")
+        self._step_history.append(_StepRecord(
+            step=self.step_count,
+            accepted=accept,
+            score_before=self.current_score,
+            score_after=new_score,
+            rationale=rationale[:120],  # cap length so history stays compact
+        ))
 
         if accept:
             self.current_score = new_score  # track raw score, penalty only for accept decision

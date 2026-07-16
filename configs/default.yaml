@@ -19,11 +19,13 @@ palette:
 
 optimizer:
   max_steps: 30           # total optimization steps to run
+  resample: nearest               # downsampling filter: nearest | box | lanczos | bilinear
   grid_size: null         # null = let LLM pick from grid_presets; or force e.g. 32
   grid_presets: [8, 16, 32, 48, 64]   # candidate grid sizes offered to LLM when grid_size is null
   epsilon: 0.0            # probability of accepting a worse step (0.0 = pure greedy)
   cell_size: 16           # pixels per grid cell in rendered output images
   max_tool_calls: 30      # cap on tool calls the LLM may make per step
+  history_length: 5                # steps of history shown to LLM (0 = disabled)
   change_penalty_threshold: 0.4   # fraction of pixels changed above which penalty kicks in
   change_penalty_weight: 0.5      # penalty per unit of change_ratio above threshold
 
