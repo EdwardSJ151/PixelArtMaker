@@ -22,7 +22,7 @@ optimizer:
   resample: nearest               # downsampling filter: nearest | box | lanczos | bilinear
   remove_background: true         # inpaint background pixels with nearest foreground color before downsampling
   bg_tolerance: 60                # color distance tolerance for background flood-fill (0-441)
-  white_threshold: 240            # min R/G/B value to count as "white" for white-bg removal (0-255)
+  white_threshold: 220            # min R/G/B value to count as "white" for white-bg removal (0-255)
   lock_background: false          # if true, detected background cells cannot be edited by the LLM
   grid_size: null         # null = let LLM pick from grid_presets; or force e.g. 32
   grid_presets: [8, 16, 32, 48, 64]   # candidate grid sizes offered to LLM when grid_size is null
