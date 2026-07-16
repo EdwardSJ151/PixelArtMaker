@@ -145,6 +145,9 @@ class GreedyOptimizer:
             f"- {locked_count} cells are locked background — any edit to them will be rejected.\n"
             f"- Small targeted edits only. Changing >{int(self.change_penalty_threshold*100)}% of pixels is penalized.\n"
             f"- Do NOT repeat rejected approaches.\n"
+            f"- IMPORTANT: if a step is rejected, it is automatically rolled back — you always start "
+            f"from the last accepted state. Never output STOP because of a rejection; just try a "
+            f"different smaller edit.\n"
             f"- PRIORITY: match the original seed image pixel-for-pixel as closely as the palette allows. "
             f"Every edit must bring the grid closer to the original — do not invent details.\n"
             + (
