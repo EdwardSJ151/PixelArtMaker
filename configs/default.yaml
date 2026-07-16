@@ -19,7 +19,7 @@ palette:
 
 optimizer:
   max_steps: 30           # total optimization steps to run
-  resample: box                   # downsampling filter: box | nearest | lanczos | bilinear
+  resample: nearest               # downsampling filter: nearest | box | lanczos | bilinear
   remove_background: true         # inpaint background pixels with nearest foreground color before downsampling
   bg_tolerance: 40                # color distance tolerance for background flood-fill (0-441)
   grid_size: null         # null = let LLM pick from grid_presets; or force e.g. 32

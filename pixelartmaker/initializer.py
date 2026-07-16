@@ -126,29 +126,27 @@ def _flood_fill_background(pixels: np.ndarray, tolerance: int) -> np.ndarray:
     return is_bg
 
 
-def _inpaint_background(image: Image.Image, tolerance: int = 40) -> Image.Image:
-    """Replace background pixels with the nearest foreground (creature) color.
+def _flatten_background(image: Image.Image, tolerance: int = 40) -> Image.Image:
+    """Flood-fill background from corners and replace it with a single uniform color.
 
-    This eliminates halo/aura artifacts before downsampling by ensuring that
-    gradient edge pixels between the subject and background are filled with
-    the nearest subject color rather than a blend of the two.
+    Using the exact mean corner color as fill makes the background perfectly flat
+    so NEAREST downsampling produces clean creature/background cells with no blending halo.
     """
-    from scipy.ndimage import distance_transform_edt
-
     pixels = np.array(image.convert("RGB"), dtype=np.uint8)
     is_bg = _flood_fill_background(pixels, tolerance)
-    is_fg = ~is_bg
 
-    if not is_fg.any():
-        print("[WARN] Background removal found no foreground pixels — skipping inpaint")
+    if not is_bg.any():
+        print("[WARN] Background removal found no background pixels — skipping")
         return image
 
-    # For every background pixel, find the nearest foreground pixel and copy its color
-    _, nearest_idx = distance_transform_edt(~is_fg, return_indices=True)
-    result = pixels.copy()
-    result[is_bg] = pixels[nearest_idx[0][is_bg], nearest_idx[1][is_bg]]
+    corners = [pixels[0, 0], pixels[0, pixels.shape[1] - 1],
+               pixels[pixels.shape[0] - 1, 0], pixels[pixels.shape[0] - 1, pixels.shape[1] - 1]]
+    fill_color = np.round(np.mean(corners, axis=0)).astype(np.uint8)
 
-    print(f"[inpaint] Replaced {is_bg.sum()} background pixels with nearest foreground color")
+    result = pixels.copy()
+    result[is_bg] = fill_color
+
+    print(f"[bg] Flattened {is_bg.sum()} background pixels to {tuple(fill_color)}")
     return Image.fromarray(result)
 
 
@@ -156,14 +154,14 @@ def pixelate(
     image: Image.Image,
     grid_size: int,
     palette: Palette,
-    resample: str = "box",
+    resample: str = "nearest",
     remove_background: bool = False,
     bg_tolerance: int = 40,
 ) -> PixelGrid:
     """Downsample image to grid_size×grid_size and map each pixel to the nearest palette color."""
     img = image.convert("RGB")
     if remove_background:
-        img = _inpaint_background(img, tolerance=bg_tolerance)
+        img = _flatten_background(img, tolerance=bg_tolerance)
     mode = _RESAMPLE_MODES.get(resample, Image.BOX)
     small = img.resize((grid_size, grid_size), mode)
     pixels = np.array(small)
