@@ -21,7 +21,7 @@ optimizer:
   max_steps: 30           # total optimization steps to run
   resample: nearest               # downsampling filter: nearest | box | lanczos | bilinear
   remove_background: true         # inpaint background pixels with nearest foreground color before downsampling
-  bg_tolerance: 40                # color distance tolerance for background flood-fill (0-441)
+  bg_tolerance: 60                # color distance tolerance for background flood-fill (0-441)
   grid_size: null         # null = let LLM pick from grid_presets; or force e.g. 32
   grid_presets: [8, 16, 32, 48, 64]   # candidate grid sizes offered to LLM when grid_size is null
   epsilon: 0.0            # probability of accepting a worse step (0.0 = pure greedy)
