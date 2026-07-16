@@ -115,20 +115,24 @@ class GreedyOptimizer:
         accepted = [r for r in self._step_history if r.accepted]
         best_score = accepted[-1].score_after if accepted else self.current_score
 
+        locked_count = int(grid.locked.sum())
         prompt = (
-            f"You are a pixel art editor. Grid: {w}×{h}. Step {self.step_count + 1}.\n"
-            f'Goal: "{self.description}"\n\n'
-            f"Current similarity score: {self.current_score:.4f} (best so far: {best_score:.4f}). "
-            f"Higher = closer to the description. Your edits must increase this score to be accepted.\n\n"
-            f"Palette — ONLY use these exact names:\n"
+            f"You are a pixel art editor. Grid: {w}×{h}. Step {self.step_count + 1}.\n\n"
+            f"YOUR ONLY TASK: make this grid match the original seed image as closely as possible, "
+            f"given the palette and grid resolution constraints.\n"
+            f'The original image shows: "{self.description}"\n\n'
+            f"Do NOT interpret this description creatively. Do NOT add features, emotions, expressions, "
+            f"or artistic elements that are not in the original. You are correcting a pixelated "
+            f"reproduction, not designing something new.\n\n"
+            f"Similarity score: {self.current_score:.4f} (best: {best_score:.4f}) — higher = closer to original.\n\n"
+            f"Palette — ONLY these exact color names:\n"
             f"{palette.format_for_prompt()}\n\n"
             f"{format_tools_for_prompt()}\n"
-            f"## Rules\n"
-            f"- Make small, targeted edits to areas that don't match the description.\n"
-            f"- Do NOT rewrite large regions — edits that change >{int(self.change_penalty_threshold*100)}% "
-            f"of pixels are penalized.\n"
-            f"- Do NOT repeat approaches that were already rejected.\n\n"
-            f"## Output format — respond with ONLY valid JSON, no other text:\n"
+            f"## Hard rules\n"
+            f"- {locked_count} cells are locked background — any edit to them will be rejected.\n"
+            f"- Small targeted edits only. Changing >{int(self.change_penalty_threshold*100)}% of pixels is penalized.\n"
+            f"- Do NOT repeat rejected approaches.\n\n"
+            f"## Output — respond with ONLY valid JSON, no other text:\n"
             f'{{"type":"STEP","rationale":"one sentence why","tool_calls":['
             f'{{"tool_name":"set_pixel","parameters":{{"x":5,"y":3,"color":"dark_purple"}}}}'
             f']}}\n'

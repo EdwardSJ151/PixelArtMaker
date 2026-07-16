@@ -33,12 +33,17 @@ class EditManager:
             return names.index(color)
         return None
 
+    def _is_locked(self, y: int, x: int) -> bool:
+        return bool(self._grid.locked[y, x])
+
     def set_pixel(self, x: int, y: int, color: str) -> tuple[bool, str]:
         idx = self._resolve_color(color)
         if idx is None:
             return False, f"Unknown color '{color}'. Valid: {self._grid.palette.names}"
         if not self._grid.in_bounds(y, x):
             return False, f"Position ({x},{y}) out of bounds ({self._grid.width}×{self._grid.height})"
+        if self._is_locked(y, x):
+            return False, f"Cell ({x},{y}) is a locked background cell"
         self._grid.set(y, x, idx)
         return True, ""
 
@@ -51,7 +56,7 @@ class EditManager:
         for y in range(y_min, y_max + 1):
             for x in range(x_min, x_max + 1):
                 if filled or y in (y_min, y_max) or x in (x_min, x_max):
-                    if self._grid.in_bounds(y, x):
+                    if self._grid.in_bounds(y, x) and not self._is_locked(y, x):
                         self._grid.set(y, x, idx)
         return True, ""
 
@@ -59,14 +64,13 @@ class EditManager:
         idx = self._resolve_color(color)
         if idx is None:
             return False, f"Unknown color '{color}'"
-        # Bresenham's line
         dx, dy = abs(x2 - x1), abs(y2 - y1)
         sx = 1 if x1 < x2 else -1
         sy = 1 if y1 < y2 else -1
         err = dx - dy
         x, y = x1, y1
         while True:
-            if self._grid.in_bounds(y, x):
+            if self._grid.in_bounds(y, x) and not self._is_locked(y, x):
                 self._grid.set(y, x, idx)
             if x == x2 and y == y2:
                 break
@@ -85,6 +89,8 @@ class EditManager:
             return False, f"Unknown color '{color}'"
         if not self._grid.in_bounds(y, x):
             return False, f"Position ({x},{y}) out of bounds"
+        if self._is_locked(y, x):
+            return False, f"Cell ({x},{y}) is a locked background cell"
         target = self._grid.get(y, x)
         if target == idx:
             return True, ""
@@ -97,6 +103,8 @@ class EditManager:
             if not self._grid.in_bounds(cy, cx):
                 continue
             if self._grid.get(cy, cx) != target:
+                continue
+            if self._is_locked(cy, cx):
                 continue
             visited.add((cy, cx))
             self._grid.set(cy, cx, idx)

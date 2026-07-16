@@ -70,7 +70,7 @@ def select_grid_size(
             response = client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": content}],
-                max_tokens=64,
+                max_tokens=32768,
             )
             raw = response.choices[0].message.content
 
@@ -126,18 +126,17 @@ def _flood_fill_background(pixels: np.ndarray, tolerance: int) -> np.ndarray:
     return is_bg
 
 
-def _flatten_background(image: Image.Image, tolerance: int = 40) -> Image.Image:
-    """Flood-fill background from corners and replace it with a single uniform color.
+def _flatten_background(image: Image.Image, tolerance: int = 40) -> tuple[Image.Image, np.ndarray]:
+    """Flood-fill background from corners, replace with uniform color.
 
-    Using the exact mean corner color as fill makes the background perfectly flat
-    so NEAREST downsampling produces clean creature/background cells with no blending halo.
+    Returns the cleaned image AND the boolean background mask (True = background pixel).
     """
     pixels = np.array(image.convert("RGB"), dtype=np.uint8)
     is_bg = _flood_fill_background(pixels, tolerance)
 
     if not is_bg.any():
         print("[WARN] Background removal found no background pixels — skipping")
-        return image
+        return image, is_bg
 
     corners = [pixels[0, 0], pixels[0, pixels.shape[1] - 1],
                pixels[pixels.shape[0] - 1, 0], pixels[pixels.shape[0] - 1, pixels.shape[1] - 1]]
@@ -147,7 +146,16 @@ def _flatten_background(image: Image.Image, tolerance: int = 40) -> Image.Image:
     result[is_bg] = fill_color
 
     print(f"[bg] Flattened {is_bg.sum()} background pixels to {tuple(fill_color)}")
-    return Image.fromarray(result)
+    return Image.fromarray(result), is_bg
+
+
+def _downsample_mask(mask: np.ndarray, grid_size: int) -> np.ndarray:
+    """Downsample a full-res boolean mask to grid_size×grid_size.
+    A cell is background if majority of its source pixels are background.
+    """
+    mask_img = Image.fromarray(mask.astype(np.uint8) * 255)
+    small = mask_img.resize((grid_size, grid_size), Image.BOX)
+    return np.array(small) > 127
 
 
 def pixelate(
@@ -160,9 +168,12 @@ def pixelate(
 ) -> PixelGrid:
     """Downsample image to grid_size×grid_size and map each pixel to the nearest palette color."""
     img = image.convert("RGB")
+    locked = None
     if remove_background:
-        img = _flatten_background(img, tolerance=bg_tolerance)
-    mode = _RESAMPLE_MODES.get(resample, Image.BOX)
+        img, bg_mask = _flatten_background(img, tolerance=bg_tolerance)
+        locked = _downsample_mask(bg_mask, grid_size)
+
+    mode = _RESAMPLE_MODES.get(resample, Image.NEAREST)
     small = img.resize((grid_size, grid_size), mode)
     pixels = np.array(small)
 
@@ -172,4 +183,4 @@ def pixelate(
             r, g, b = int(pixels[y, x, 0]), int(pixels[y, x, 1]), int(pixels[y, x, 2])
             data[y, x] = palette.nearest_index(r, g, b)
 
-    return PixelGrid(data, palette)
+    return PixelGrid(data, palette, locked=locked)

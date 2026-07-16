@@ -44,6 +44,9 @@ optimizer:
 # ─────────────────────────────────────────────────────────────────────────────
 # CLIP SCORER
 # ─────────────────────────────────────────────────────────────────────────────
+scorer:
+  type: vlm             # vlm = vision LLM scores each step (recommended) | clip = CLIPEvaluator
+
 clip:
   model: hf-hub:timm/ViT-B-16-SigLIP        # SigLIP B16 — recommended (better on stylized/pixel art)
   # model: hf-hub:timm/ViT-SO400M-14-SigLIP  # SigLIP SO400M — best quality, slower

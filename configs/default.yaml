@@ -31,6 +31,9 @@ optimizer:
   change_penalty_threshold: 0.4   # fraction of pixels changed above which penalty kicks in
   change_penalty_weight: 0.5      # penalty per unit of change_ratio above threshold
 
+scorer:
+  type: vlm             # vlm = use the vision LLM to score each step | clip = use CLIPEvaluator
+
 clip:
   model: hf-hub:timm/ViT-B-16-SigLIP   # SigLIP via open_clip — better than CLIP for stylized images
   pretrained: ""                         # not used for hf-hub models; set for standard CLIP e.g. openai

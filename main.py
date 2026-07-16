@@ -76,7 +76,7 @@ def main():
 
     gif_duration_ms = out_cfg.get("gif_duration_ms", 200)
 
-    from pixelartmaker.evaluator import CLIPEvaluator
+    from pixelartmaker.evaluator import CLIPEvaluator, VLMEvaluator
     from pixelartmaker.initializer import pixelate, select_grid_size, _flatten_background
     from pixelartmaker.optimizer import GreedyOptimizer
     from pixelartmaker.palette import Palette
@@ -86,7 +86,7 @@ def main():
     print(f"Loaded seed image: {image_path} ({seed_image.size[0]}×{seed_image.size[1]})")
 
     # Flatten background before palette extraction so halo colors don't claim palette slots
-    palette_source = _flatten_background(seed_image, tolerance=bg_tolerance) if remove_background else seed_image
+    palette_source = _flatten_background(seed_image, tolerance=bg_tolerance)[0] if remove_background else seed_image
 
     print(f"Provider: {provider} / Model: {model}")
 
@@ -129,8 +129,13 @@ def main():
     initial_img.save(os.path.join(run_dir, "initial.png"))
     print(f"Initial grid saved → {run_dir}/initial.png")
 
-    print(f"\nLoading scoring model ({clip_model})...")
-    evaluator = CLIPEvaluator(model_name=clip_model, pretrained=clip_pretrained)
+    scorer_type = cfg.get("scorer", {}).get("type", "vlm")
+    if scorer_type == "vlm":
+        print(f"\nUsing VLM scorer ({model})...")
+        evaluator = VLMEvaluator(provider=provider, model=model, base_url=base_url)
+    else:
+        print(f"\nLoading scoring model ({clip_model})...")
+        evaluator = CLIPEvaluator(model_name=clip_model, pretrained=clip_pretrained)
 
     optimizer = GreedyOptimizer(
         description=description,
