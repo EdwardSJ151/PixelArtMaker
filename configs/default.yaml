@@ -3,12 +3,12 @@ description: "purple floating demon cyclops with horns"
 extra_instruction: ""   # optional spatial/style hint appended to every prompt
 
 llm:
-  provider: openai        # openai | gemini | vllm
-  model: gpt-4o
-  base_url: null          # required for vllm, e.g. http://localhost:8000/v1
-  temperature: 0.7        # LLM sampling temperature
-  max_tokens: 4096        # max tokens in LLM response
-  image_detail: low       # low | high | auto  (OpenAI/vLLM vision only; Gemini ignores this)
+  provider: vllm
+  model: Qwen/Qwen3.5-122B-A10B-FP8
+  base_url: http://10.100.0.122:8048/v1
+  temperature: 0.7
+  max_tokens: 64000
+  image_detail: low
 
 palette:
   size: 16                # number of colors extracted via k-means (ignored when system is set)

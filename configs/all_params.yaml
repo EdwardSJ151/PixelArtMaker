@@ -14,7 +14,7 @@ llm:
   base_url: null          # vllm only: endpoint URL, e.g. http://localhost:8000/v1
   temperature: 0.7        # sampling temperature — lower = more deterministic
   max_tokens: 4096        # max tokens in each LLM response
-  image_detail: low       # low | high | auto — OpenAI/vLLM vision quality (Gemini ignores this)
+  image_detail: low       # low | high | auto — OpenAI only; ignored for vllm and gemini
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PALETTE

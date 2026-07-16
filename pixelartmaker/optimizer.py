@@ -130,9 +130,12 @@ class GreedyOptimizer:
             return response.text
         else:
             b64 = base64.b64encode(image_bytes).decode("utf-8")
+            image_url: dict = {"url": f"data:image/png;base64,{b64}"}
+            if self.provider == "openai":
+                image_url["detail"] = self.image_detail
             content = [
                 {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}", "detail": self.image_detail}},
+                {"type": "image_url", "image_url": image_url},
             ]
             response = self._client.chat.completions.create(
                 model=self.model,
