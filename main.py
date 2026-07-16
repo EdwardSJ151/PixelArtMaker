@@ -61,6 +61,8 @@ def main():
     resample                 = opt_cfg.get("resample", "nearest")
     remove_background        = opt_cfg.get("remove_background", False)
     bg_tolerance             = opt_cfg.get("bg_tolerance", 40)
+    white_threshold          = opt_cfg.get("white_threshold", 240)
+    lock_background          = opt_cfg.get("lock_background", True)
     max_steps                = opt_cfg["max_steps"]
     grid_size                = opt_cfg.get("grid_size")
     grid_presets             = opt_cfg.get("grid_presets", [8, 16, 32, 48, 64])
@@ -86,9 +88,10 @@ def main():
     print(f"Loaded seed image: {image_path} ({seed_image.size[0]}×{seed_image.size[1]})")
 
     # Flatten + crop background before palette extraction so halo/bg colors don't claim palette slots
+    used_alpha_removal = False
     if remove_background:
         import numpy as np
-        flat, bg_mask = _flatten_background(seed_image, tolerance=bg_tolerance)
+        flat, bg_mask, used_alpha_removal = _flatten_background(seed_image, tolerance=bg_tolerance, white_threshold=white_threshold)
         fg = ~bg_mask
         rows = np.any(fg, axis=1)
         cols = np.any(fg, axis=0)
@@ -133,7 +136,8 @@ def main():
 
     print(f"\nPixelating to {grid_size}×{grid_size}...")
     grid = pixelate(seed_image, grid_size, palette, resample=resample,
-                    remove_background=remove_background, bg_tolerance=bg_tolerance)
+                    remove_background=remove_background, bg_tolerance=bg_tolerance,
+                    white_threshold=white_threshold, lock_background=lock_background)
 
     run_dir = make_run_dir(description)
     print(f"Run directory: {run_dir}")
@@ -171,7 +175,7 @@ def main():
         change_penalty_weight=change_penalty_weight,
         history_length=history_length,
     )
-    optimizer.initialize(grid, original_image=palette_source)
+    optimizer.initialize(grid, original_image=palette_source, used_alpha_removal=used_alpha_removal)
 
     print(f"\nStarting optimization ({max_steps} steps)...")
     print("-" * 50)

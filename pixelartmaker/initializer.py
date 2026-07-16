@@ -126,13 +126,61 @@ def _flood_fill_background(pixels: np.ndarray, tolerance: int) -> np.ndarray:
     return is_bg
 
 
-def _flatten_background(image: Image.Image, tolerance: int = 40) -> tuple[Image.Image, np.ndarray]:
+def _remove_white_background(
+    image: Image.Image, white_threshold: int = 240
+) -> tuple[Image.Image, np.ndarray]:
+    """BFS flood-fill from all four corners to identify pixels that are white (or near-white)
+    AND connected to the image border.  Those pixels are treated as background.
+
+    The dark sprite border stops the flood-fill from leaking into the foreground.
+
+    Returns ``(cleaned_image, is_bg_mask)`` where background pixels in *cleaned_image*
+    have been replaced with black (consistent with how alpha removal works).
+    """
+    from collections import deque
+
+    pixels = np.array(image.convert("RGB"), dtype=np.uint8)
+    h, w = pixels.shape[:2]
+
+    is_bg = np.zeros((h, w), dtype=bool)
+    visited = np.zeros((h, w), dtype=bool)
+    queue = deque([(0, 0), (0, w - 1), (h - 1, 0), (h - 1, w - 1)])
+
+    while queue:
+        y, x = queue.popleft()
+        if y < 0 or y >= h or x < 0 or x >= w or visited[y, x]:
+            continue
+        visited[y, x] = True
+        r, g, b = int(pixels[y, x, 0]), int(pixels[y, x, 1]), int(pixels[y, x, 2])
+        if r >= white_threshold and g >= white_threshold and b >= white_threshold:
+            is_bg[y, x] = True
+            queue.extend([(y + 1, x), (y - 1, x), (y, x + 1), (y, x - 1)])
+
+    result = pixels.copy()
+    result[is_bg] = np.array([0, 0, 0], dtype=np.uint8)
+
+    print(
+        f"[bg] White-bg removal (threshold={white_threshold}): "
+        f"masked {is_bg.sum()} background pixels"
+    )
+    return Image.fromarray(result), is_bg
+
+
+def _flatten_background(
+    image: Image.Image, tolerance: int = 40, white_threshold: int = 240
+) -> tuple[Image.Image, np.ndarray, bool]:
     """Remove background, replace with uniform color.
 
-    Prefers the alpha channel when present (handles AI-generated PNGs with anti-aliased edges).
-    Falls back to BFS flood-fill from corners when no alpha channel exists.
+    Priority order:
+    1. Alpha channel — used when the image has transparency.
+    2. White-background removal — used when >30 % of border pixels are near-white
+       (i.e. all R, G, B channels >= white_threshold).  Relies on the sprite having
+       a darker border that stops the flood-fill from entering the foreground.
+    3. Generic BFS flood-fill from corners — fallback for all other cases.
 
-    Returns the cleaned image AND the boolean background mask (True = background pixel).
+    Returns ``(cleaned_image, is_bg_mask, used_alpha)`` where *is_bg_mask* is a
+    boolean array (True = background pixel) and *used_alpha* indicates whether the
+    alpha channel was the source of truth.
     """
     if image.mode in ("RGBA", "LA") or "transparency" in image.info:
         rgba = image.convert("RGBA")
@@ -145,14 +193,37 @@ def _flatten_background(image: Image.Image, tolerance: int = 40) -> tuple[Image.
         result[is_bg] = fill_color
 
         print(f"[bg] Alpha channel found — masked {is_bg.sum()} transparent pixels")
-        return Image.fromarray(result), is_bg
+        return Image.fromarray(result), is_bg, True
 
-    pixels = np.array(image.convert("RGB"), dtype=np.uint8)
+    # Check whether the image has a predominantly white border before falling back
+    # to the generic flood-fill.  Sample all four edges and count white-enough pixels.
+    rgb_img = image.convert("RGB")
+    border_pixels = np.array(rgb_img, dtype=np.uint8)
+    h_b, w_b = border_pixels.shape[:2]
+    top    = border_pixels[0, :, :]
+    bottom = border_pixels[h_b - 1, :, :]
+    left   = border_pixels[:, 0, :]
+    right  = border_pixels[:, w_b - 1, :]
+    border = np.concatenate([top, bottom, left, right], axis=0)
+    white_border = np.all(border >= white_threshold, axis=1)
+    white_fraction = white_border.mean()
+
+    if white_fraction > 0.30:
+        print(
+            f"[bg] White border detected ({white_fraction:.1%} of border pixels >= {white_threshold}) "
+            "— using white-background removal"
+        )
+        cleaned, is_bg = _remove_white_background(rgb_img, white_threshold=white_threshold)
+        if not is_bg.any():
+            print("[WARN] White-bg removal found no background pixels — skipping")
+        return cleaned, is_bg, False
+
+    pixels = np.array(rgb_img, dtype=np.uint8)
     is_bg = _flood_fill_background(pixels, tolerance)
 
     if not is_bg.any():
         print("[WARN] Background removal found no background pixels — skipping")
-        return image.convert("RGB"), is_bg
+        return image.convert("RGB"), is_bg, False
 
     corners = [pixels[0, 0], pixels[0, pixels.shape[1] - 1],
                pixels[pixels.shape[0] - 1, 0], pixels[pixels.shape[0] - 1, pixels.shape[1] - 1]]
@@ -162,7 +233,7 @@ def _flatten_background(image: Image.Image, tolerance: int = 40) -> tuple[Image.
     result[is_bg] = fill_color
 
     print(f"[bg] Flood-fill: flattened {is_bg.sum()} background pixels to {tuple(fill_color)}")
-    return Image.fromarray(result), is_bg
+    return Image.fromarray(result), is_bg, False
 
 
 def _downsample_mask(mask: np.ndarray, grid_size: int) -> np.ndarray:
@@ -181,12 +252,16 @@ def pixelate(
     resample: str = "nearest",
     remove_background: bool = False,
     bg_tolerance: int = 40,
+    white_threshold: int = 240,
+    lock_background: bool = False,
 ) -> PixelGrid:
     """Downsample image to grid_size×grid_size and map each pixel to the nearest palette color."""
     img = image.convert("RGB")
     locked = None
     if remove_background:
-        img, bg_mask = _flatten_background(img, tolerance=bg_tolerance)
+        img, bg_mask, _ = _flatten_background(
+            img, tolerance=bg_tolerance, white_threshold=white_threshold
+        )
         fg = ~bg_mask
         rows = np.any(fg, axis=1)
         cols = np.any(fg, axis=0)
@@ -198,7 +273,8 @@ def pixelate(
             img = img.crop((x1, y1, x2 + 1, y2 + 1))
             bg_mask = bg_mask[y1:y2 + 1, x1:x2 + 1]
             print(f"[bg] Cropped to foreground bounding box: {img.size[0]}×{img.size[1]} px")
-        locked = _downsample_mask(bg_mask, grid_size)
+        if lock_background:
+            locked = _downsample_mask(bg_mask, grid_size)
 
     mode = _RESAMPLE_MODES.get(resample, Image.NEAREST)
     small = img.resize((grid_size, grid_size), mode)

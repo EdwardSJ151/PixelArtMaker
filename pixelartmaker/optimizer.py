@@ -96,9 +96,10 @@ class GreedyOptimizer:
                     raise ValueError("OPENAI_API_KEY env var required for openai provider")
                 return OpenAI(api_key=api_key, base_url=base_url)
 
-    def initialize(self, grid: PixelGrid, original_image: Image.Image | None = None) -> None:
+    def initialize(self, grid: PixelGrid, original_image: Image.Image | None = None, used_alpha_removal: bool = False) -> None:
         self.edit_manager = EditManager(grid)
         self.original_image = original_image
+        self._used_alpha_removal = used_alpha_removal
         rendered = render(self.edit_manager.grid)
         self.current_score = self._score(rendered)
         self.accepted_frames = [rendered.copy()]
@@ -146,9 +147,13 @@ class GreedyOptimizer:
             f"- Do NOT repeat rejected approaches.\n"
             f"- PRIORITY: match the original seed image pixel-for-pixel as closely as the palette allows. "
             f"Every edit must bring the grid closer to the original — do not invent details.\n"
-            f"- Remove 'aura' pixels: stray pixels at the edge of the sprite that bleed the wrong color "
-            f"into the background border (e.g. a faint purple halo around a dark outline). "
-            f"Replace them with the correct outline or background-adjacent color from the palette.\n\n"
+            + (
+            f"- Remove 'aura' pixels: the original image had semi-transparent edge pixels (from "
+            f"anti-aliasing) that may appear as a faint halo around the sprite. Find stray off-color "
+            f"pixels at sprite edges and replace them with the correct outline or nearest solid palette color.\n"
+            if self._used_alpha_removal else ""
+            )
+            + "\n"
             f"## Output — respond with ONLY valid JSON, no other text:\n"
             f'{{"type":"STEP","rationale":"one sentence why","tool_calls":['
             f'{{"tool_name":"set_pixel","parameters":{{"x":5,"y":3,"color":"dark_purple"}}}}'
