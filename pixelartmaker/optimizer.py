@@ -96,8 +96,9 @@ class GreedyOptimizer:
                     raise ValueError("OPENAI_API_KEY env var required for openai provider")
                 return OpenAI(api_key=api_key, base_url=base_url)
 
-    def initialize(self, grid: PixelGrid) -> None:
+    def initialize(self, grid: PixelGrid, original_image: Image.Image | None = None) -> None:
         self.edit_manager = EditManager(grid)
+        self.original_image = original_image
         rendered = render(self.edit_manager.grid)
         self.current_score = self._score(rendered)
         self.accepted_frames = [rendered.copy()]
@@ -117,13 +118,23 @@ class GreedyOptimizer:
         best_score = accepted[-1].score_after if accepted else self.current_score
 
         locked_count = int(grid.locked.sum())
+        has_original = self.original_image is not None
         prompt = (
             f"You are a pixel art editor. Grid: {w}×{h}. Step {self.step_count + 1}.\n\n"
-            f"YOUR ONLY TASK: make this grid match the original seed image as closely as possible, "
-            f"given the palette and grid resolution constraints.\n"
-            f'The original image shows: "{self.description}"\n\n'
+            + (
+                f"You are given TWO images:\n"
+                f"  • Image 1 — ORIGINAL TARGET: the source image you must reproduce\n"
+                f"  • Image 2 — CURRENT GRID: the pixelated canvas you are editing\n\n"
+                f"YOUR ONLY TASK: make Image 2 match Image 1 as closely as possible "
+                f"given the palette and grid resolution constraints. "
+                f"Study Image 1 carefully — shapes, colors, outlines, proportions — then edit Image 2.\n"
+                if has_original else
+                f"YOUR ONLY TASK: make this grid match the original seed image as closely as possible "
+                f"given the palette and grid resolution constraints.\n"
+            )
+            + f'Subject: "{self.description}"\n\n'
             f"Do NOT interpret this description creatively. Do NOT add features, emotions, expressions, "
-            f"or artistic elements that are not in the original. You are correcting a pixelated "
+            f"or artistic elements that are not visible in the original. You are correcting a pixelated "
             f"reproduction, not designing something new.\n\n"
             f"Similarity score: {self.current_score:.4f} (best: {best_score:.4f}) — higher = closer to original.\n\n"
             f"Palette — ONLY these exact color names:\n"
@@ -132,7 +143,12 @@ class GreedyOptimizer:
             f"## Hard rules\n"
             f"- {locked_count} cells are locked background — any edit to them will be rejected.\n"
             f"- Small targeted edits only. Changing >{int(self.change_penalty_threshold*100)}% of pixels is penalized.\n"
-            f"- Do NOT repeat rejected approaches.\n\n"
+            f"- Do NOT repeat rejected approaches.\n"
+            f"- PRIORITY: match the original seed image pixel-for-pixel as closely as the palette allows. "
+            f"Every edit must bring the grid closer to the original — do not invent details.\n"
+            f"- Remove 'aura' pixels: stray pixels at the edge of the sprite that bleed the wrong color "
+            f"into the background border (e.g. a faint purple halo around a dark outline). "
+            f"Replace them with the correct outline or background-adjacent color from the palette.\n\n"
             f"## Output — respond with ONLY valid JSON, no other text:\n"
             f'{{"type":"STEP","rationale":"one sentence why","tool_calls":['
             f'{{"tool_name":"set_pixel","parameters":{{"x":5,"y":3,"color":"dark_purple"}}}}'
@@ -158,23 +174,36 @@ class GreedyOptimizer:
 
         return prompt
 
-    def _call_llm(self, prompt: str, image_bytes: bytes) -> str:
+    def _call_llm(self, prompt: str, image_bytes: bytes, original_bytes: bytes | None = None) -> str:
         if self.provider == "gemini":
             from google.genai import types
-            response = self._client.models.generate_content(
-                model=self.model,
-                contents=[prompt, types.Part.from_bytes(data=image_bytes, mime_type="image/png")],
-            )
+            contents = [prompt]
+            if original_bytes:
+                contents += [
+                    "Image 1 — ORIGINAL TARGET:",
+                    types.Part.from_bytes(data=original_bytes, mime_type="image/png"),
+                    "Image 2 — CURRENT GRID (edit this):",
+                ]
+            contents.append(types.Part.from_bytes(data=image_bytes, mime_type="image/png"))
+            response = self._client.models.generate_content(model=self.model, contents=contents)
             return response.text
         else:
             b64 = base64.b64encode(image_bytes).decode("utf-8")
             image_url: dict = {"url": f"data:image/png;base64,{b64}"}
             if self.provider == "openai":
                 image_url["detail"] = self.image_detail
-            content = [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": image_url},
-            ]
+            content = [{"type": "text", "text": prompt}]
+            if original_bytes:
+                orig_b64 = base64.b64encode(original_bytes).decode("utf-8")
+                orig_url: dict = {"url": f"data:image/png;base64,{orig_b64}"}
+                if self.provider == "openai":
+                    orig_url["detail"] = self.image_detail
+                content += [
+                    {"type": "text", "text": "Image 1 — ORIGINAL TARGET:"},
+                    {"type": "image_url", "image_url": orig_url},
+                    {"type": "text", "text": "Image 2 — CURRENT GRID (edit this):"},
+                ]
+            content.append({"type": "image_url", "image_url": image_url})
             response = self._client.chat.completions.create(
                 model=self.model,
                 messages=[{"role": "user", "content": content}],
@@ -210,9 +239,15 @@ class GreedyOptimizer:
             with open(os.path.join(run_dir, "debug.log"), "a") as f:
                 f.write(f"\n{'='*60}\nSTEP {self.step_count}\n{'='*60}\n{prompt}\n")
 
+        original_bytes = None
+        if self.original_image is not None:
+            buf = io.BytesIO()
+            self.original_image.save(buf, format="PNG")
+            original_bytes = buf.getvalue()
+
         t0 = time.time()
         try:
-            raw = self._call_llm(prompt, image_bytes)
+            raw = self._call_llm(prompt, image_bytes, original_bytes=original_bytes)
         except Exception as e:
             print(f"[ERROR] Step {self.step_count}: LLM call failed — {e}")
             return False
@@ -291,13 +326,14 @@ class GreedyOptimizer:
         if accept:
             self.current_score = new_score  # track raw score, penalty only for accept decision
             self.accepted_frames.append(new_image.copy())
-            new_image.save(os.path.join(run_dir, f"step_{self.step_count:03d}.png"))
+            new_image.save(os.path.join(run_dir, f"step_{self.step_count:03d}_accepted.png"))
             if self.verbose:
                 print(
                     f"  Step {self.step_count}: ACCEPTED  score {new_score:.4f} "
                     f"({successes}/{len(tool_calls)} tools ok, {changed} px changed, {elapsed:.1f}s)"
                 )
         else:
+            new_image.save(os.path.join(run_dir, f"step_{self.step_count:03d}_rejected.png"))
             self.edit_manager.rollback(checkpoint)
             if self.verbose:
                 print(

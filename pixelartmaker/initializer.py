@@ -127,16 +127,32 @@ def _flood_fill_background(pixels: np.ndarray, tolerance: int) -> np.ndarray:
 
 
 def _flatten_background(image: Image.Image, tolerance: int = 40) -> tuple[Image.Image, np.ndarray]:
-    """Flood-fill background from corners, replace with uniform color.
+    """Remove background, replace with uniform color.
+
+    Prefers the alpha channel when present (handles AI-generated PNGs with anti-aliased edges).
+    Falls back to BFS flood-fill from corners when no alpha channel exists.
 
     Returns the cleaned image AND the boolean background mask (True = background pixel).
     """
+    if image.mode in ("RGBA", "LA") or "transparency" in image.info:
+        rgba = image.convert("RGBA")
+        alpha = np.array(rgba)[:, :, 3]
+        is_bg = alpha < 128
+
+        rgb = np.array(rgba)[:, :, :3]
+        fill_color = np.array([0, 0, 0], dtype=np.uint8)
+        result = rgb.copy()
+        result[is_bg] = fill_color
+
+        print(f"[bg] Alpha channel found — masked {is_bg.sum()} transparent pixels")
+        return Image.fromarray(result), is_bg
+
     pixels = np.array(image.convert("RGB"), dtype=np.uint8)
     is_bg = _flood_fill_background(pixels, tolerance)
 
     if not is_bg.any():
         print("[WARN] Background removal found no background pixels — skipping")
-        return image, is_bg
+        return image.convert("RGB"), is_bg
 
     corners = [pixels[0, 0], pixels[0, pixels.shape[1] - 1],
                pixels[pixels.shape[0] - 1, 0], pixels[pixels.shape[0] - 1, pixels.shape[1] - 1]]
@@ -145,7 +161,7 @@ def _flatten_background(image: Image.Image, tolerance: int = 40) -> tuple[Image.
     result = pixels.copy()
     result[is_bg] = fill_color
 
-    print(f"[bg] Flattened {is_bg.sum()} background pixels to {tuple(fill_color)}")
+    print(f"[bg] Flood-fill: flattened {is_bg.sum()} background pixels to {tuple(fill_color)}")
     return Image.fromarray(result), is_bg
 
 

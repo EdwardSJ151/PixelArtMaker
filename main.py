@@ -171,7 +171,7 @@ def main():
         change_penalty_weight=change_penalty_weight,
         history_length=history_length,
     )
-    optimizer.initialize(grid)
+    optimizer.initialize(grid, original_image=palette_source)
 
     print(f"\nStarting optimization ({max_steps} steps)...")
     print("-" * 50)
