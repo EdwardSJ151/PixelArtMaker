@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
-"""PixelArtMaker — agentic pixel art generation via vision LLM + CLIP feedback."""
+"""PixelArtMaker — agentic pixel art refinement via vision LLM."""
 
 import argparse
 import os
-import sys
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 import yaml
 from dotenv import load_dotenv
 from PIL import Image
+
+from pixelartmaker.evaluator import CLIPEvaluator, VLMEvaluator
+from pixelartmaker.initializer import flatten_background, pixelate, select_grid_size
+from pixelartmaker.optimizer import GreedyOptimizer
+from pixelartmaker.palette import Palette
+from pixelartmaker.renderer import render, save_gif
+from pixelartmaker.utils import fg_bounding_box, make_client
 
 load_dotenv()
 
@@ -28,8 +35,8 @@ def make_run_dir(description: str) -> str:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate pixel art with an agentic LLM loop.")
-    parser.add_argument("--config", type=str, default="configs/default.yaml", help="Path to YAML config file")
+    parser = argparse.ArgumentParser(description="Refine pixel art with an agentic LLM loop.")
+    parser.add_argument("--config", type=str, default="configs/default.yaml")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -58,68 +65,62 @@ def main():
     kmeans_seed     = pal_cfg.get("kmeans_seed", 42)
     max_pixels      = pal_cfg.get("max_pixels", 50_000)
 
-    resample                 = opt_cfg.get("resample", "nearest")
     remove_background        = opt_cfg.get("remove_background", False)
     bg_tolerance             = opt_cfg.get("bg_tolerance", 40)
     white_threshold          = opt_cfg.get("white_threshold", 240)
-    lock_background          = opt_cfg.get("lock_background", True)
+    lock_background          = opt_cfg.get("lock_background", False)
+    resample                 = opt_cfg.get("resample", "nearest")
     max_steps                = opt_cfg["max_steps"]
     grid_size                = opt_cfg.get("grid_size")
     grid_presets             = opt_cfg.get("grid_presets", [8, 16, 32, 48, 64])
     epsilon                  = opt_cfg.get("epsilon", 0.0)
     cell_size                = opt_cfg.get("cell_size", 16)
-    max_tool_calls           = opt_cfg.get("max_tool_calls", 30)
+    max_tool_calls           = opt_cfg.get("max_tool_calls", 4)
     change_penalty_threshold = opt_cfg.get("change_penalty_threshold", 0.4)
     change_penalty_weight    = opt_cfg.get("change_penalty_weight", 0.5)
     history_length           = opt_cfg.get("history_length", 0)
 
-    clip_model     = clip_cfg.get("model", "ViT-B-32")
-    clip_pretrained = clip_cfg.get("pretrained", "openai")
+    harness_cfg       = cfg.get("harness", {})
+    harness_mode      = harness_cfg.get("mode", "vlm")
+    grid_ruler        = harness_cfg.get("grid_ruler", True)
+    ascii_with_image  = harness_cfg.get("ascii_with_image", True)
+    preview_highlight = harness_cfg.get("preview_highlight", "#FF4444")
 
+    clip_model      = clip_cfg.get("model", "hf-hub:timm/ViT-B-16-SigLIP")
+    clip_pretrained = clip_cfg.get("pretrained", "")
     gif_duration_ms = out_cfg.get("gif_duration_ms", 200)
 
-    from pixelartmaker.evaluator import CLIPEvaluator, VLMEvaluator
-    from pixelartmaker.initializer import pixelate, select_grid_size, _flatten_background
-    from pixelartmaker.optimizer import GreedyOptimizer
-    from pixelartmaker.palette import Palette
-    from pixelartmaker.renderer import render, save_gif
-
-    seed_image = Image.open(image_path).convert("RGB")
+    seed_image = Image.open(image_path)
     print(f"Loaded seed image: {image_path} ({seed_image.size[0]}×{seed_image.size[1]})")
 
-    # Flatten + crop background before palette extraction so halo/bg colors don't claim palette slots
+    # Flatten background once — result is reused for palette extraction AND pixelation
     used_alpha_removal = False
+    preflattened = None
     if remove_background:
-        import numpy as np
-        flat, bg_mask, used_alpha_removal = _flatten_background(seed_image, tolerance=bg_tolerance, white_threshold=white_threshold)
-        fg = ~bg_mask
-        rows = np.any(fg, axis=1)
-        cols = np.any(fg, axis=0)
-        if rows.any():
-            y1 = int(np.argmax(rows));  y2 = int(len(rows) - 1 - np.argmax(rows[::-1]))
-            x1 = int(np.argmax(cols));  x2 = int(len(cols) - 1 - np.argmax(cols[::-1]))
+        flat, bg_mask, used_alpha_removal = flatten_background(
+            seed_image, tolerance=bg_tolerance, white_threshold=white_threshold
+        )
+        bbox = fg_bounding_box(~bg_mask)
+        if bbox is not None:
+            x1, y1, x2, y2 = bbox
             palette_source = flat.crop((x1, y1, x2 + 1, y2 + 1))
+            palette_bg_mask = bg_mask[y1:y2 + 1, x1:x2 + 1]
         else:
             palette_source = flat
+            palette_bg_mask = bg_mask
+        preflattened = (flat, bg_mask)
     else:
-        palette_source = seed_image
+        palette_source = seed_image.convert("RGB")
 
     print(f"Provider: {provider} / Model: {model}")
+    print(f"Harness mode: {harness_mode}")
 
     if grid_size:
         print(f"Grid size: {grid_size}×{grid_size} (from config)")
     else:
         print("Selecting grid size via LLM...")
-        if provider == "gemini":
-            from google import genai
-            init_client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
-        elif provider == "vllm":
-            from openai import OpenAI
-            init_client = OpenAI(api_key="EMPTY", base_url=base_url or "http://localhost:8000/v1")
-        else:
-            from openai import OpenAI
-            init_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-        grid_size = select_grid_size(seed_image, description, init_client, model, provider, grid_presets)
+        init_client = make_client(provider, base_url)
+        grid_size = select_grid_size(palette_source, description, init_client, model, provider, grid_presets)
 
     if system:
         palette = Palette.from_system(system)
@@ -135,9 +136,12 @@ def main():
             print(f"  {name:<20} {hex_val}")
 
     print(f"\nPixelating to {grid_size}×{grid_size}...")
-    grid = pixelate(seed_image, grid_size, palette, resample=resample,
-                    remove_background=remove_background, bg_tolerance=bg_tolerance,
-                    white_threshold=white_threshold, lock_background=lock_background)
+    grid = pixelate(
+        seed_image, grid_size, palette,
+        resample=resample,
+        preflattened=preflattened,
+        lock_background=lock_background,
+    )
 
     run_dir = make_run_dir(description)
     print(f"Run directory: {run_dir}")
@@ -154,7 +158,7 @@ def main():
         print(f"\nUsing VLM scorer ({model})...")
         evaluator = VLMEvaluator(provider=provider, model=model, base_url=base_url)
     else:
-        print(f"\nLoading scoring model ({clip_model})...")
+        print(f"\nLoading CLIP scorer ({clip_model})...")
         evaluator = CLIPEvaluator(model_name=clip_model, pretrained=clip_pretrained)
 
     optimizer = GreedyOptimizer(
@@ -174,6 +178,10 @@ def main():
         change_penalty_threshold=change_penalty_threshold,
         change_penalty_weight=change_penalty_weight,
         history_length=history_length,
+        harness_mode=harness_mode,
+        grid_ruler=grid_ruler,
+        ascii_with_image=ascii_with_image,
+        preview_highlight=preview_highlight,
     )
     optimizer.initialize(grid, original_image=palette_source, used_alpha_removal=used_alpha_removal)
 
@@ -190,7 +198,7 @@ def main():
         save_gif(optimizer.accepted_frames, gif_path, duration_ms=gif_duration_ms)
         print(f"Progression GIF → {gif_path}")
 
-    print(f"\nFinal CLIP score: {optimizer.current_score:.4f}")
+    print(f"\nFinal score: {optimizer.current_score:.4f}")
     print(f"Accepted steps: {len(optimizer.accepted_frames) - 1} / {optimizer.step_count}")
 
 

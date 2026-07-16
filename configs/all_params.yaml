@@ -2,7 +2,7 @@
 # INPUT
 # ─────────────────────────────────────────────────────────────────────────────
 image: "creature.png"                  # path to seed image (any PIL-readable format)
-description: "purple floating demon cyclops with horns"  # text the LLM and CLIP optimize toward
+description: "your subject here"  # text description used in prompts and scoring
 extra_instruction: ""                  # raw text appended to every LLM prompt (no parsing/enforcement)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -24,7 +24,7 @@ palette:
   system: null            # use a fixed system palette instead: pico8 | cga  (nes/snes/gameboy are stubs)
   kmeans_n_init: 10       # how many times k-means reruns with different seeds — higher = more stable, slower
   kmeans_seed: 42         # random seed for k-means and pixel sampling — change for different color layouts
-  max_pixels: 100000       # pixels sampled from the image before k-means — lower = faster but less accurate
+  max_pixels: 50000        # pixels sampled from the image before k-means — lower = faster but less accurate
 
 # ─────────────────────────────────────────────────────────────────────────────
 # OPTIMIZER
@@ -32,11 +32,15 @@ palette:
 optimizer:
   max_steps: 30                    # total number of LLM refinement steps to run
   resample: nearest                # filter used to shrink the seed image: nearest | box | lanczos | bilinear
+  remove_background: false         # detect and remove background before pixelating
+  bg_tolerance: 40                 # color-distance tolerance for generic flood-fill background removal (0-441)
+  white_threshold: 240             # min R/G/B value to count as "white" for white-bg removal (0-255)
+  lock_background: false           # if true, detected background cells cannot be edited by the LLM
   grid_size: null                  # null = LLM picks from grid_presets; set a number to force (e.g. 32)
   grid_presets: [8, 16, 32, 48, 64]  # candidate grid sizes offered to the LLM when grid_size is null
   epsilon: 0.0                     # probability of accepting a worse step — 0 = pure greedy, >0 = exploration
   cell_size: 16                    # pixels per grid cell in saved PNG/GIF output
-  max_tool_calls: 30               # max tool calls the LLM can make in a single step
+  max_tool_calls: 4                # attempts per step; each attempt proposes one tool call, committed on acceptance
   history_length: 5                # past steps summarized and injected into each prompt (0 = disabled)
   change_penalty_threshold: 0.4    # fraction of pixels that can change before a score penalty applies
   change_penalty_weight: 0.5       # how much to penalize per unit of change above the threshold
@@ -63,3 +67,15 @@ output:
 # DEBUG
 # ─────────────────────────────────────────────────────────────────────────────
 debug: false              # true = write debug.log with full prompts and raw LLM responses per step
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HARNESS — how the canvas is presented to the LLM
+# ─────────────────────────────────────────────────────────────────────────────
+harness:
+  mode: vlm                    # vlm       — image only (+ optional coordinate ruler)
+                               # ascii     — compact text-grid appended to prompt (+ image if ascii_with_image)
+                               # ascii+vlm — both ruler image and ascii text
+                               # preview   — extra confirm call per attempt showing highlighted preview
+  grid_ruler: true             # vlm/ascii+vlm: bake col/row coordinate rulers into image margins
+  ascii_with_image: true       # ascii mode: also send the image alongside the text grid
+  preview_highlight: "#FF4444" # preview mode: border color for highlighted cells

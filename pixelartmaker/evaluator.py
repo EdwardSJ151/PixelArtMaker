@@ -1,25 +1,11 @@
-"""Scoring evaluators for pixel art vs. text description."""
+"""Scoring evaluators for pixel art vs. target image."""
 
 from __future__ import annotations
 
-import base64
-import io
 import math
-import os
-import re
 from PIL import Image
 
-
-def _img_to_b64(image: Image.Image) -> str:
-    buf = io.BytesIO()
-    image.save(buf, format="PNG")
-    return base64.b64encode(buf.getvalue()).decode("utf-8")
-
-
-def _img_to_bytes(image: Image.Image) -> bytes:
-    buf = io.BytesIO()
-    image.save(buf, format="PNG")
-    return buf.getvalue()
+from .utils import make_client, strip_think_tags, img_to_bytes, img_to_b64
 
 
 class CLIPEvaluator:
@@ -30,12 +16,11 @@ class CLIPEvaluator:
         is_hf_hub = model_name.startswith("hf-hub:")
         if is_hf_hub:
             self._model, _, self._preprocess = open_clip.create_model_and_transforms(model_name)
-            self._tokenizer = open_clip.get_tokenizer(model_name)
         else:
             self._model, _, self._preprocess = open_clip.create_model_and_transforms(
                 model_name, pretrained=pretrained
             )
-            self._tokenizer = open_clip.get_tokenizer(model_name)
+        self._tokenizer = open_clip.get_tokenizer(model_name)
         self._model.eval()
         self._text_features = None
         self._cached_description: str = ""
@@ -73,28 +58,14 @@ class CLIPEvaluator:
 
 class VLMEvaluator:
     """Uses the vision LLM to score each step by comparing three images:
-    the original pixelated version, the current best, and the candidate.
-
-    When original and current_best are provided (all steps after init),
-    the model compares candidate vs current_best and returns >0.5 if candidate wins.
-
-    On the very first call (no current_best yet), returns 0.5 as baseline.
+    original, current best, and candidate. Returns >0.5 if candidate wins.
+    Returns 0.5 as baseline when no comparison images are available yet.
     """
 
     def __init__(self, provider: str, model: str, base_url: str | None):
         self.provider = provider
         self.model = model
-        self._client = self._init_client(provider, base_url)
-
-    def _init_client(self, provider: str, base_url: str | None):
-        if provider == "gemini":
-            from google import genai
-            return genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
-        else:
-            from openai import OpenAI
-            if provider == "vllm":
-                return OpenAI(api_key="EMPTY", base_url=base_url or "http://localhost:8000/v1")
-            return OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        self._client = make_client(provider, base_url)
 
     def score(
         self,
@@ -103,12 +74,6 @@ class VLMEvaluator:
         original: Image.Image | None = None,
         current_best: Image.Image | None = None,
     ) -> float:
-        """Score the candidate image.
-
-        With original + current_best: comparative 3-image evaluation.
-          Returns >0.5 if candidate is better than current_best at matching original.
-        Without them: returns 0.5 (baseline for the initial frame).
-        """
         if original is None or current_best is None:
             return 0.5
 
@@ -133,9 +98,9 @@ class VLMEvaluator:
                     model=self.model,
                     contents=[
                         prompt,
-                        types.Part.from_bytes(data=_img_to_bytes(original), mime_type="image/png"),
-                        types.Part.from_bytes(data=_img_to_bytes(current_best), mime_type="image/png"),
-                        types.Part.from_bytes(data=_img_to_bytes(image), mime_type="image/png"),
+                        types.Part.from_bytes(data=img_to_bytes(original), mime_type="image/png"),
+                        types.Part.from_bytes(data=img_to_bytes(current_best), mime_type="image/png"),
+                        types.Part.from_bytes(data=img_to_bytes(image), mime_type="image/png"),
                     ],
                 )
                 raw = response.text
@@ -145,21 +110,21 @@ class VLMEvaluator:
                     messages=[{"role": "user", "content": [
                         {"type": "text", "text": prompt},
                         {"type": "text", "text": "Image 1 — ORIGINAL:"},
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_img_to_b64(original)}"}},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_to_b64(original)}"}},
                         {"type": "text", "text": "Image 2 — CURRENT BEST:"},
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_img_to_b64(current_best)}"}},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_to_b64(current_best)}"}},
                         {"type": "text", "text": "Image 3 — CANDIDATE:"},
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_img_to_b64(image)}"}},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_to_b64(image)}"}},
                     ]}],
                     max_tokens=256,
                 )
                 raw = response.choices[0].message.content
 
-            raw = re.sub(r"<think>[\s\S]*?</think>", "", raw, flags=re.IGNORECASE).strip()
+            raw = strip_think_tags(raw)
+            import re
             match = re.search(r"\d+", raw)
             if match:
-                value = max(0, min(100, int(match.group())))
-                return value / 100.0
+                return max(0, min(100, int(match.group()))) / 100.0
             print(f"[WARN] VLM scorer returned no number: {raw[:100]!r}")
             return 0.5
         except Exception as e:

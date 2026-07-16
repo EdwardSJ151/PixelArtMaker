@@ -47,12 +47,10 @@ CGA_COLORS: dict[str, str] = {
     "white":          "#FFFFFF",
 }
 
-SYSTEM_PALETTES: dict[str, dict[str, str] | None] = {
-    "pico8":   PICO8_COLORS,
-    "cga":     CGA_COLORS,
-    "nes":     None,   # stub — complex scanline restrictions
-    "snes":    None,   # stub — 15-bit subpalette banks
-    "gameboy": None,   # stub — 4 shades of green
+SYSTEM_PALETTES: dict[str, dict[str, str]] = {
+    "pico8": PICO8_COLORS,
+    "cga":   CGA_COLORS,
+    # nes / snes / gameboy not implemented
 }
 
 
@@ -125,6 +123,8 @@ class Palette:
         """
         self.named_colors = named_colors  # name → hex
         self._names = list(named_colors.keys())
+        self._hex_list = list(named_colors.values())
+        self._name_to_idx = {n: i for i, n in enumerate(self._names)}
         self._rgb = np.array([_hex_to_rgb(h) for h in named_colors.values()], dtype=np.float32)
 
     @property
@@ -132,13 +132,13 @@ class Palette:
         return self._names
 
     def index_of(self, name: str) -> int:
-        return self._names.index(name)
+        return self._name_to_idx[name]
 
     def name_of(self, index: int) -> str:
         return self._names[index]
 
     def hex_of(self, index: int) -> str:
-        return list(self.named_colors.values())[index]
+        return self._hex_list[index]
 
     def nearest_index(self, r: int, g: int, b: int) -> int:
         """Return palette index of the nearest color to (r, g, b)."""
@@ -154,13 +154,12 @@ class Palette:
 
     @classmethod
     def from_system(cls, system: str) -> "Palette":
-        colors = SYSTEM_PALETTES.get(system)
-        if colors is None:
+        if system not in SYSTEM_PALETTES:
+            available = ", ".join(SYSTEM_PALETTES.keys())
             raise NotImplementedError(
-                f"System palette '{system}' is not yet implemented. "
-                f"Available: pico8, cga"
+                f"System palette '{system}' is not implemented. Available: {available}"
             )
-        return cls(colors)
+        return cls(SYSTEM_PALETTES[system])
 
     @classmethod
     def extract_from_image(

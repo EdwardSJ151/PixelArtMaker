@@ -15,23 +15,20 @@ class EditManager:
 
     @property
     def grid(self) -> PixelGrid:
-        return self._grid.copy()
+        return self._grid
 
     def checkpoint(self) -> PixelGrid:
         return self._grid.copy()
 
     def rollback(self, checkpoint: PixelGrid) -> None:
-        self._grid = checkpoint.copy()
-
-    def apply(self, grid: PixelGrid) -> None:
-        self._grid = grid.copy()
+        self._grid = checkpoint
 
     def _resolve_color(self, color: str) -> int | None:
         """Return palette index for a color name, or None if invalid."""
-        names = self._grid.palette.names
-        if color in names:
-            return names.index(color)
-        return None
+        try:
+            return self._grid.palette.index_of(color)
+        except KeyError:
+            return None
 
     def _is_locked(self, y: int, x: int) -> bool:
         return bool(self._grid.locked[y, x])

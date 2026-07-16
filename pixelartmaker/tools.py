@@ -15,42 +15,10 @@ TOOL_SPECS = [
             "color": "(string, required) Color name from the active palette.",
         },
     },
-    {
-        "name": "set_rect",
-        "description": "Fill a rectangle with a palette color.",
-        "parameters": {
-            "x1": "(int, required) Left column (inclusive).",
-            "y1": "(int, required) Top row (inclusive).",
-            "x2": "(int, required) Right column (inclusive).",
-            "y2": "(int, required) Bottom row (inclusive).",
-            "color": "(string, required) Color name from the active palette.",
-            "filled": "(bool, optional, default true) If false, only draw the border.",
-        },
-    },
-    {
-        "name": "set_line",
-        "description": "Draw a straight line between two points using Bresenham's algorithm.",
-        "parameters": {
-            "x1": "(int, required) Start column.",
-            "y1": "(int, required) Start row.",
-            "x2": "(int, required) End column.",
-            "y2": "(int, required) End row.",
-            "color": "(string, required) Color name from the active palette.",
-        },
-    },
-    {
-        "name": "flood_fill",
-        "description": "Flood-fill from a seed point, replacing all connected same-color pixels.",
-        "parameters": {
-            "x": "(int, required) Seed column.",
-            "y": "(int, required) Seed row.",
-            "color": "(string, required) Replacement color name.",
-        },
-    },
 ]
 
 
-def format_tools_for_prompt() -> str:
+def _build_tools_prompt() -> str:
     lines = ["## Available Tools\n"]
     for spec in TOOL_SPECS:
         lines.append(f"### {spec['name']}")
@@ -62,28 +30,18 @@ def format_tools_for_prompt() -> str:
     return "\n".join(lines)
 
 
+_TOOLS_PROMPT = _build_tools_prompt()
+
+
+def format_tools_for_prompt() -> str:
+    return _TOOLS_PROMPT
+
+
 def execute_tool(name: str, params: dict, edit_manager: EditManager) -> dict:
     """Dispatch a tool call to the EditManager. Returns {success, error}."""
     try:
         if name == "set_pixel":
             ok, err = edit_manager.set_pixel(
-                x=int(params["x"]), y=int(params["y"]), color=str(params["color"])
-            )
-        elif name == "set_rect":
-            ok, err = edit_manager.set_rect(
-                x1=int(params["x1"]), y1=int(params["y1"]),
-                x2=int(params["x2"]), y2=int(params["y2"]),
-                color=str(params["color"]),
-                filled=bool(params.get("filled", True)),
-            )
-        elif name == "set_line":
-            ok, err = edit_manager.set_line(
-                x1=int(params["x1"]), y1=int(params["y1"]),
-                x2=int(params["x2"]), y2=int(params["y2"]),
-                color=str(params["color"]),
-            )
-        elif name == "flood_fill":
-            ok, err = edit_manager.flood_fill(
                 x=int(params["x"]), y=int(params["y"]), color=str(params["color"])
             )
         else:

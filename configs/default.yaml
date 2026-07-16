@@ -44,3 +44,7 @@ output:
   gif_duration_ms: 200    # milliseconds per frame in the progression GIF
 
 debug: false              # write debug.log with full prompts and raw LLM responses
+
+harness:
+  mode: vlm           # vlm | ascii | ascii+vlm | preview
+  grid_ruler: true    # draw coordinate rulers on the rendered image (vlm and ascii+vlm modes)
