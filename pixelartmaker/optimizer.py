@@ -103,7 +103,7 @@ class GreedyOptimizer:
         self.accepted_frames = [rendered.copy()]
         self.step_count = 0
         if self.verbose:
-            print(f"Initial CLIP score: {self.current_score:.4f}")
+            print(f"Initial score: {self.current_score:.4f}")
 
     def _score(self, image: Image.Image) -> float:
         return self.evaluator.score(image, self.description)

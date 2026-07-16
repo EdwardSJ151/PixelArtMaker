@@ -77,13 +77,16 @@ def main():
     gif_duration_ms = out_cfg.get("gif_duration_ms", 200)
 
     from pixelartmaker.evaluator import CLIPEvaluator
-    from pixelartmaker.initializer import pixelate, select_grid_size
+    from pixelartmaker.initializer import pixelate, select_grid_size, _flatten_background
     from pixelartmaker.optimizer import GreedyOptimizer
     from pixelartmaker.palette import Palette
     from pixelartmaker.renderer import render, save_gif
 
     seed_image = Image.open(image_path).convert("RGB")
     print(f"Loaded seed image: {image_path} ({seed_image.size[0]}×{seed_image.size[1]})")
+
+    # Flatten background before palette extraction so halo colors don't claim palette slots
+    palette_source = _flatten_background(seed_image, tolerance=bg_tolerance) if remove_background else seed_image
 
     print(f"Provider: {provider} / Model: {model}")
 
@@ -108,7 +111,7 @@ def main():
     else:
         print(f"Extracting {pal_size}-color palette from seed image...")
         palette = Palette.extract_from_image(
-            seed_image, n_colors=pal_size,
+            palette_source, n_colors=pal_size,
             kmeans_n_init=kmeans_n_init, kmeans_seed=kmeans_seed, max_pixels=max_pixels,
         )
         print("Palette:")
@@ -126,7 +129,7 @@ def main():
     initial_img.save(os.path.join(run_dir, "initial.png"))
     print(f"Initial grid saved → {run_dir}/initial.png")
 
-    print("\nLoading CLIP model...")
+    print(f"\nLoading scoring model ({clip_model})...")
     evaluator = CLIPEvaluator(model_name=clip_model, pretrained=clip_pretrained)
 
     optimizer = GreedyOptimizer(
