@@ -378,7 +378,7 @@ class GreedyOptimizer:
                 continue
 
             new_grid = self.edit_manager.grid
-            changed = new_grid.diff(grid)
+            changed = new_grid.diff(checkpoint)
             if changed == 0:
                 self.edit_manager.rollback(checkpoint)
                 continue
@@ -387,7 +387,7 @@ class GreedyOptimizer:
             current_best_frame = self.accepted_frames[-1] if self.accepted_frames else None
             new_score = self._score(new_image, current_best=current_best_frame)
 
-            change_ratio = changed / grid.data.size
+            change_ratio = changed / checkpoint.data.size
             penalty = 0.0
             if change_ratio > self.change_penalty_threshold:
                 penalty = self.change_penalty_weight * (change_ratio - self.change_penalty_threshold)
