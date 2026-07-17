@@ -73,17 +73,34 @@ class VLMEvaluator:
         description: str,
         original: Image.Image | None = None,
         current_best: Image.Image | None = None,
+        diff_highlight: Image.Image | None = None,
+        ascii_before: str | None = None,
+        ascii_after: str | None = None,
+        change_desc: str | None = None,
     ) -> float:
         if original is None or current_best is None:
             return 0.5
 
+        has_diff = diff_highlight is not None
+        has_ascii = ascii_before is not None and ascii_after is not None
         prompt = (
             f'You are evaluating pixel art edits. The goal is to match: "{description}"\n\n'
-            f"You are shown three images in order:\n"
-            f"1. ORIGINAL — the target pixel art to reproduce\n"
+            f"You are shown {'four' if has_diff else 'three'} images in order:\n"
+            f"1. ORIGINAL — the target to reproduce\n"
             f"2. CURRENT BEST — the best version so far\n"
-            f"3. CANDIDATE — a new proposed edit\n\n"
-            f"Compare CANDIDATE vs CURRENT BEST. Which is a closer match to ORIGINAL?\n\n"
+            f"3. CANDIDATE — a new proposed edit\n"
+            + (f"4. DIFF — the CANDIDATE with the changed pixel(s) outlined in red\n" if has_diff else "")
+            + f"\nCompare CANDIDATE vs CURRENT BEST. Which is a closer match to ORIGINAL?\n"
+            f"Use the DIFF image to locate exactly what changed.\n\n"
+        )
+        if change_desc:
+            prompt += f"## Change made\n{change_desc}\n\n"
+        if has_ascii:
+            prompt += (
+                f"## Grid BEFORE edit (CURRENT BEST state):\n{ascii_before}\n\n"
+                f"## Grid AFTER edit (CANDIDATE state):\n{ascii_after}\n\n"
+            )
+        prompt += (
             f"Reply with ONLY a number from 0 to 100 where:\n"
             f"0   = CURRENT BEST is clearly better\n"
             f"50  = they are equal\n"
@@ -94,28 +111,34 @@ class VLMEvaluator:
         try:
             if self.provider == "gemini":
                 from google.genai import types
-                response = self._client.models.generate_content(
-                    model=self.model,
-                    contents=[
-                        prompt,
-                        types.Part.from_bytes(data=img_to_bytes(original), mime_type="image/png"),
-                        types.Part.from_bytes(data=img_to_bytes(current_best), mime_type="image/png"),
-                        types.Part.from_bytes(data=img_to_bytes(image), mime_type="image/png"),
-                    ],
-                )
+                contents = [
+                    prompt,
+                    types.Part.from_bytes(data=img_to_bytes(original), mime_type="image/png"),
+                    types.Part.from_bytes(data=img_to_bytes(current_best), mime_type="image/png"),
+                    types.Part.from_bytes(data=img_to_bytes(image), mime_type="image/png"),
+                ]
+                if has_diff:
+                    contents.append(types.Part.from_bytes(data=img_to_bytes(diff_highlight), mime_type="image/png"))
+                response = self._client.models.generate_content(model=self.model, contents=contents)
                 raw = response.text
             else:
+                content = [
+                    {"type": "text", "text": prompt},
+                    {"type": "text", "text": "Image 1 — ORIGINAL:"},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_to_b64(original)}"}},
+                    {"type": "text", "text": "Image 2 — CURRENT BEST:"},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_to_b64(current_best)}"}},
+                    {"type": "text", "text": "Image 3 — CANDIDATE:"},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_to_b64(image)}"}},
+                ]
+                if has_diff:
+                    content += [
+                        {"type": "text", "text": "Image 4 — DIFF (changed pixels outlined in red):"},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_to_b64(diff_highlight)}"}},
+                    ]
                 response = self._client.chat.completions.create(
                     model=self.model,
-                    messages=[{"role": "user", "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "text", "text": "Image 1 — ORIGINAL:"},
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_to_b64(original)}"}},
-                        {"type": "text", "text": "Image 2 — CURRENT BEST:"},
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_to_b64(current_best)}"}},
-                        {"type": "text", "text": "Image 3 — CANDIDATE:"},
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_to_b64(image)}"}},
-                    ]}],
+                    messages=[{"role": "user", "content": content}],
                     max_tokens=256,
                 )
                 raw = response.choices[0].message.content

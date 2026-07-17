@@ -100,8 +100,24 @@ class GreedyOptimizer:
         if self.verbose:
             print(f"Initial score: {self.current_score:.4f}")
 
-    def _score(self, image: Image.Image, current_best: Image.Image | None = None) -> float:
-        return self.evaluator.score(image, self.description, original=self.original_image, current_best=current_best)
+    def _score(
+        self,
+        image: Image.Image,
+        current_best: Image.Image | None = None,
+        diff_highlight: Image.Image | None = None,
+        ascii_before: str | None = None,
+        ascii_after: str | None = None,
+        change_desc: str | None = None,
+    ) -> float:
+        return self.evaluator.score(
+            image, self.description,
+            original=self.original_image,
+            current_best=current_best,
+            diff_highlight=diff_highlight,
+            ascii_before=ascii_before,
+            ascii_after=ascii_after,
+            change_desc=change_desc,
+        )
 
     def _build_prompt(self, grid: PixelGrid, ascii_grid: str | None = None) -> str:
         palette = grid.palette
@@ -385,8 +401,27 @@ class GreedyOptimizer:
                 continue
 
             new_image = render(new_grid)
+            affected = self._diff_cells(checkpoint, new_grid)
+            diff_hl = render_preview(new_grid, affected)
+
+            ascii_before, _ = render_ascii(checkpoint)
+            ascii_after, _ = render_ascii(new_grid)
+
+            palette = checkpoint.palette
+            change_desc = ", ".join(
+                f"x={cx},y={cy}: {palette.names[checkpoint.data[cy, cx]]} → {palette.names[new_grid.data[cy, cx]]}"
+                for cx, cy in affected
+            )
+
             current_best_frame = self.accepted_frames[-1] if self.accepted_frames else None
-            new_score = self._score(new_image, current_best=current_best_frame)
+            new_score = self._score(
+                new_image,
+                current_best=current_best_frame,
+                diff_highlight=diff_hl,
+                ascii_before=ascii_before,
+                ascii_after=ascii_after,
+                change_desc=change_desc,
+            )
 
             change_ratio = changed / checkpoint.data.size
             penalty = 0.0
@@ -407,8 +442,7 @@ class GreedyOptimizer:
             ))
 
             if self.highlight_changes:
-                affected = self._diff_cells(checkpoint, new_grid)
-                hl_image = render_preview(new_grid, affected)
+                hl_image = diff_hl
 
             if accept:
                 self.current_score = new_score
