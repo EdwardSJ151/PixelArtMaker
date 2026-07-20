@@ -1,4 +1,4 @@
-image: "creature_white.png"
+image: "creature-nes.png"
 description: "purple floating demon cyclops with horns"
 extra_instruction: ""   # optional spatial/style hint appended to every prompt
 
