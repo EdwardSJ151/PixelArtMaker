@@ -1,0 +1,66 @@
+image: "creature_white.png"
+description: "purple floating demon cyclops with horns"
+extra_instruction: ""   # optional spatial/style hint appended to every prompt
+
+llm:
+  provider: vllm
+  model: Sehyo/Qwen3.5-397B-A17B-NVFP4
+  base_url: http://localhost:8031/v1
+  temperature: 0.7
+  max_tokens: 55000
+  image_detail: low
+
+sprite:
+  system: nes            # nes | snes | null (null = free k-means)
+  nes_type: sprite        # sprite | background  (only used when system: nes)
+
+  # dimensions — null lets the LLM pick from size_presets
+  size: "16x16"              # force a size e.g. "16x16", "8x16", "32x32"
+  size_presets:
+    nes:     ["8x8", "8x16", "16x16", "16x32", "32x32"]
+    snes:    ["8x8", "16x16", "16x32", "32x32", "32x64", "64x64"]
+    default: ["8x8", "16x16", "32x32", "48x48", "64x64"]
+
+  # palette extraction
+  palette_size: 16        # k-means colors (ignored when system enforces a limit)
+  palette_file: null      # path to .txt hex palette file — supercedes palette_size
+  kmeans_n_init: 10
+  kmeans_seed: 42
+  max_pixels: 50000
+
+  # image preprocessing
+  resample: nearest
+  remove_background: true
+  bg_tolerance: 60
+  white_threshold: 210
+  second_white_threshold: null  # second BFS white-removal pass; null = disabled
+
+  # output / mode
+  cell_size: 16
+  sprite_only: true      # stop after initial.png — skip LLM optimization
+
+optimizer:
+  max_steps: 30
+  epsilon: 0.0
+  max_tool_calls: 4
+  history_length: 5
+  lock_background: false
+  change_penalty_threshold: 0.4
+  change_penalty_weight: 0.5
+
+scorer:
+  type: vlm             # vlm | clip
+
+clip:
+  model: hf-hub:timm/ViT-B-16-SigLIP
+  pretrained: ""
+
+output:
+  gif_duration_ms: 200
+
+debug: false
+
+harness:
+  mode: ascii+vlm               # vlm | ascii | ascii+vlm | preview
+  grid_ruler: true
+  highlight_changes: true
