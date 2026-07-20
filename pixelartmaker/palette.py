@@ -64,18 +64,53 @@ def _rgb_to_hex(r: int, g: int, b: int) -> str:
     return f"#{r:02X}{g:02X}{b:02X}"
 
 
-def best_n_from_palette(pixels_rgb: np.ndarray, master: "Palette", n: int) -> "Palette":
+def best_n_from_palette(
+    pixels_rgb: np.ndarray,
+    master: "Palette",
+    n: int,
+    min_distance: float = 30.0,
+) -> "Palette":
     """Return a new Palette with the n most-frequent master colors in the image.
 
     Each pixel is snapped to the nearest master palette entry (L2 RGB distance),
-    then the top-n by pixel count are selected. Used for NES palette construction.
+    then candidates are ranked by frequency. Colors too close to an already-selected
+    color (L2 < min_distance) are skipped in favor of more distinct ones. If not
+    enough distinct colors exist to fill n slots, near-duplicates are admitted as
+    a fallback so the count is always honored.
     """
     pixels = pixels_rgb.reshape(-1, 3).astype(np.float32)
     dists = np.sum((master._rgb[None, :, :] - pixels[:, None, :]) ** 2, axis=2)
     assignments = np.argmin(dists, axis=1)
     counts = np.bincount(assignments, minlength=len(master.names))
-    top_n_indices = np.argsort(counts)[-n:][::-1]
-    named = {master.names[i]: master.hex_of(i) for i in top_n_indices}
+
+    # Rank all entries by frequency, most frequent first
+    ranked = np.argsort(counts)[::-1]
+
+    selected: list[int] = []
+    deferred: list[int] = []  # too-close entries, admitted only if needed
+
+    for idx in ranked:
+        if counts[idx] == 0:
+            break
+        rgb = master._rgb[idx]
+        too_close = any(
+            float(np.sqrt(np.sum((rgb - master._rgb[s]) ** 2))) < min_distance
+            for s in selected
+        )
+        if too_close:
+            deferred.append(idx)
+        else:
+            selected.append(idx)
+        if len(selected) == n:
+            break
+
+    # Fill remaining slots from deferred (near-duplicates) if we came up short
+    for idx in deferred:
+        if len(selected) == n:
+            break
+        selected.append(idx)
+
+    named = {master.names[i]: master.hex_of(i) for i in selected}
     return Palette(named)
 
 
