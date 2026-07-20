@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import colorsys
+from pathlib import Path
+
 import numpy as np
 from PIL import Image
 
@@ -50,7 +52,6 @@ CGA_COLORS: dict[str, str] = {
 SYSTEM_PALETTES: dict[str, dict[str, str]] = {
     "pico8": PICO8_COLORS,
     "cga":   CGA_COLORS,
-    # nes / snes / gameboy not implemented
 }
 
 
@@ -61,6 +62,21 @@ def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
 
 def _rgb_to_hex(r: int, g: int, b: int) -> str:
     return f"#{r:02X}{g:02X}{b:02X}"
+
+
+def best_n_from_palette(pixels_rgb: np.ndarray, master: "Palette", n: int) -> "Palette":
+    """Return a new Palette with the n most-frequent master colors in the image.
+
+    Each pixel is snapped to the nearest master palette entry (L2 RGB distance),
+    then the top-n by pixel count are selected. Used for NES palette construction.
+    """
+    pixels = pixels_rgb.reshape(-1, 3).astype(np.float32)
+    dists = np.sum((master._rgb[None, :, :] - pixels[:, None, :]) ** 2, axis=2)
+    assignments = np.argmin(dists, axis=1)
+    counts = np.bincount(assignments, minlength=len(master.names))
+    top_n_indices = np.argsort(counts)[-n:][::-1]
+    named = {master.names[i]: master.hex_of(i) for i in top_n_indices}
+    return Palette(named)
 
 
 def _auto_name_color(r: int, g: int, b: int, existing_names: set[str]) -> str:
@@ -153,13 +169,34 @@ class Palette:
         return "\n".join(lines)
 
     @classmethod
+    def from_file(cls, path) -> "Palette":
+        """Build a Palette from a plain-text file with one hex color per line."""
+        lines = Path(path).read_text().splitlines()
+        named: dict[str, str] = {}
+        i = 0
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            hex_val = line if line.startswith("#") else f"#{line}"
+            named[f"c{i:02d}"] = hex_val
+            i += 1
+        return cls(named)
+
+    @classmethod
     def from_system(cls, system: str) -> "Palette":
-        if system not in SYSTEM_PALETTES:
-            available = ", ".join(SYSTEM_PALETTES.keys())
-            raise NotImplementedError(
-                f"System palette '{system}' is not implemented. Available: {available}"
-            )
-        return cls(SYSTEM_PALETTES[system])
+        if system in SYSTEM_PALETTES:
+            return cls(SYSTEM_PALETTES[system])
+        if system == "nes":
+            palette_dir = Path(__file__).parent.parent / "palettes"
+            nes_file = palette_dir / "nes_palette.txt"
+            if not nes_file.exists():
+                nes_file = palette_dir / "nes_wiki_palette.txt"
+            return cls.from_file(nes_file)
+        available = ", ".join(list(SYSTEM_PALETTES.keys()) + ["nes"])
+        raise NotImplementedError(
+            f"System palette '{system}' is not implemented. Available: {available}"
+        )
 
     @classmethod
     def extract_from_image(

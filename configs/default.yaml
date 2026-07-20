@@ -10,42 +10,57 @@ llm:
   max_tokens: 55000
   image_detail: low
 
-palette:
-  size: 16                # number of colors extracted via k-means (ignored when system is set)
-  system: null            # restrict to a system palette: pico8 | cga  (nes/snes/gameboy are stubs)
-  kmeans_n_init: 10       # k-means restarts — higher is more stable but slower
-  kmeans_seed: 42         # random seed for k-means reproducibility
-  max_pixels: 50000       # pixels sampled from image before k-means (cap for speed)
+sprite:
+  system: snes            # nes | snes | null (null = free k-means)
+  nes_type: sprite        # sprite | background  (only used when system: nes)
+
+  # dimensions — null lets the LLM pick from size_presets
+  size: null              # force a size e.g. "16x16", "8x16", "32x32"
+  size_presets:
+    nes:     ["8x8", "8x16", "16x16", "16x32", "32x32"]
+    snes:    ["8x8", "16x16", "16x32", "32x32", "32x64", "64x64"]
+    default: ["8x8", "16x16", "32x32", "48x48", "64x64"]
+
+  # palette extraction
+  palette_size: 16        # k-means colors (ignored when system enforces a limit)
+  palette_file: null      # path to .txt hex palette file — supercedes palette_size
+  kmeans_n_init: 10
+  kmeans_seed: 42
+  max_pixels: 50000
+
+  # image preprocessing
+  resample: nearest
+  remove_background: true
+  bg_tolerance: 60
+  white_threshold: 210
+  second_white_threshold: null  # second BFS white-removal pass; null = disabled
+
+  # output / mode
+  cell_size: 16
+  sprite_only: true      # stop after initial.png — skip LLM optimization
 
 optimizer:
-  max_steps: 30           # total optimization steps to run
-  resample: nearest               # downsampling filter: nearest | box | lanczos | bilinear
-  remove_background: true         # inpaint background pixels with nearest foreground color before downsampling
-  bg_tolerance: 60                # color distance tolerance for background flood-fill (0-441)
-  white_threshold: 210            # min R/G/B value to count as "white" for white-bg removal (0-255)
-  lock_background: false          # if true, detected background cells cannot be edited by the LLM
-  grid_size: null         # null = let LLM pick from grid_presets; or force e.g. 32
-  grid_presets: [8, 16, 32, 48, 64]   # candidate grid sizes offered to LLM when grid_size is null
-  epsilon: 0.0            # probability of accepting a worse step (0.0 = pure greedy)
-  cell_size: 16           # pixels per grid cell in rendered output images
-  max_tool_calls: 4       # cap on tool calls the LLM may make per step
-  history_length: 5                # steps of history shown to LLM (0 = disabled)
-  change_penalty_threshold: 0.4   # fraction of pixels changed above which penalty kicks in
-  change_penalty_weight: 0.5      # penalty per unit of change_ratio above threshold
+  max_steps: 30
+  epsilon: 0.0
+  max_tool_calls: 4
+  history_length: 5
+  lock_background: false
+  change_penalty_threshold: 0.4
+  change_penalty_weight: 0.5
 
 scorer:
-  type: vlm             # vlm = use the vision LLM to score each step | clip = use CLIPEvaluator
+  type: vlm             # vlm | clip
 
 clip:
-  model: hf-hub:timm/ViT-B-16-SigLIP   # SigLIP via open_clip — better than CLIP for stylized images
-  pretrained: ""                         # not used for hf-hub models; set for standard CLIP e.g. openai
+  model: hf-hub:timm/ViT-B-16-SigLIP
+  pretrained: ""
 
 output:
-  gif_duration_ms: 200    # milliseconds per frame in the progression GIF
+  gif_duration_ms: 200
 
-debug: false              # write debug.log with full prompts and raw LLM responses
+debug: false
 
 harness:
   mode: ascii+vlm               # vlm | ascii | ascii+vlm | preview
-  grid_ruler: true        # draw coordinate rulers on the rendered image (vlm and ascii+vlm modes)
-  highlight_changes: true # save an extra *_hl.png per step with changed pixels outlined in red
+  grid_ruler: true
+  highlight_changes: true

@@ -1,4 +1,4 @@
-"""Convert an image to a PixelGrid, with optional LLM-based grid size selection."""
+"""Convert an image to a PixelGrid, with optional LLM-based sprite size selection."""
 
 from __future__ import annotations
 
@@ -13,12 +13,15 @@ from .grid import PixelGrid
 from .palette import Palette
 from .utils import make_client, strip_think_tags, img_to_bytes, img_to_b64, fg_bounding_box
 
-_PRESET_LABELS = {
-    8:  "ultra-minimal icon (simple symbol, single emoji-like shape)",
-    16: "small sprite (character, item, simple object)",
-    32: "standard sprite (character with detail, simple scene)",
-    48: "detailed sprite (complex character, small scene)",
-    64: "large sprite (scene with background, high detail)",
+_SPRITE_SIZE_LABELS = {
+    "8x8":   "icon-scale sprite (minimal, single symbol or tile)",
+    "8x16":  "NES tall character sprite (slim figure, one tile wide)",
+    "16x16": "small character sprite (full character, simple detail)",
+    "16x32": "tall character sprite (SNES portrait figure)",
+    "32x32": "standard character sprite (full detail, character or enemy)",
+    "32x64": "large tall sprite (SNES boss or tall character)",
+    "48x48": "detailed character (complex design, large enemy)",
+    "64x64": "large scene or boss sprite",
 }
 
 _RESAMPLE_MODES = {
@@ -29,27 +32,27 @@ _RESAMPLE_MODES = {
 }
 
 
-def select_grid_size(
+def select_sprite_size(
     image: Image.Image,
     description: str,
     client,
     model: str,
     provider: str,
-    grid_presets: list[int] | None = None,
-) -> int:
-    """Ask the LLM to pick the best grid size for the image and description.
-    Falls back to 32 (or nearest preset) on any error.
+    size_presets: list[str] | None = None,
+) -> tuple[int, int]:
+    """Ask the LLM to pick the best sprite size (WxH). Returns (width, height).
+    Falls back to 32x32 on any error.
     """
-    presets = grid_presets or [8, 16, 32, 48, 64]
-    default_size = min(presets, key=lambda p: abs(p - 32))
+    presets = size_presets or ["8x8", "16x16", "32x32", "48x48", "64x64"]
+    default = "32x32" if "32x32" in presets else presets[len(presets) // 2]
     preset_lines = "\n".join(
-        f"- {p}: {_PRESET_LABELS.get(p, 'custom size')}" for p in sorted(presets)
+        f"- {p}: {_SPRITE_SIZE_LABELS.get(p, 'custom size')}" for p in presets
     )
     prompt = (
-        f'You are choosing a pixel art grid resolution.\n'
+        f'You are choosing a pixel art sprite resolution.\n'
         f'Description: "{description}"\n\n'
-        f'Available presets:\n{preset_lines}\n\n'
-        f'Reply with ONLY valid JSON: {{"grid_size": {default_size}, "reason": "one sentence"}}'
+        f'Available sizes (WxH):\n{preset_lines}\n\n'
+        f'Reply with ONLY valid JSON: {{"sprite_size": "{default}", "reason": "one sentence"}}'
     )
 
     raw = ""
@@ -80,16 +83,33 @@ def select_grid_size(
             if raw.startswith("json"):
                 raw = raw[4:].strip()
         data = json.loads(raw)
-        size = int(data["grid_size"])
-        size = min(presets, key=lambda p: abs(p - size))
-        print(f"Grid size selected: {size}×{size} — {data.get('reason', '')}")
-        return size
+        size_str = str(data["sprite_size"]).lower().strip()
+        if size_str not in presets:
+            size_str = default
+        w, h = (int(x) for x in size_str.split("x"))
+        print(f"Sprite size selected: {w}×{h} — {data.get('reason', '')}")
+        return w, h
     except Exception as e:
-        print(f"[ERROR] Grid size selection failed: {e}")
+        print(f"[ERROR] Sprite size selection failed: {e}")
         if raw:
             print(f"[ERROR] Raw response: {raw!r}")
-        print(f"[ERROR] Defaulting to {default_size}×{default_size}")
-        return default_size
+        w, h = (int(x) for x in default.split("x"))
+        print(f"[ERROR] Defaulting to {w}×{h}")
+        return w, h
+
+
+# Keep old name as alias for any callers that haven't updated yet
+def select_grid_size(
+    image: Image.Image,
+    description: str,
+    client,
+    model: str,
+    provider: str,
+    grid_presets: list[int] | None = None,
+) -> int:
+    presets_str = [f"{p}x{p}" for p in (grid_presets or [8, 16, 32, 48, 64])]
+    w, h = select_sprite_size(image, description, client, model, provider, presets_str)
+    return w
 
 
 def _flood_fill_background(pixels: np.ndarray, tolerance: int) -> np.ndarray:
@@ -139,6 +159,7 @@ def flatten_background(
     image: Image.Image,
     tolerance: int = 40,
     white_threshold: int = 240,
+    second_white_threshold: int | None = None,
 ) -> tuple[Image.Image, np.ndarray, bool]:
     """Remove image background. Returns (cleaned_image, bg_mask, used_alpha).
 
@@ -146,6 +167,9 @@ def flatten_background(
     1. Alpha channel — if the image has transparency, use alpha < 128 as the mask.
     2. White background — if >30% of border pixels are near-white, use white BFS.
     3. Generic flood-fill from corners (fallback).
+
+    If second_white_threshold is set, a second BFS white-removal pass runs after
+    the first using the lower threshold, expanding the masked region.
 
     Background pixels are replaced with black in the returned image.
     used_alpha=True only when an alpha channel was the source of truth.
@@ -156,6 +180,11 @@ def flatten_background(
         result = rgba[:, :, :3].copy()
         result[is_bg] = 0
         print(f"[bg] Alpha channel — masked {is_bg.sum()} transparent pixels")
+        if second_white_threshold is not None:
+            second_mask = _remove_white_background(result, second_white_threshold)
+            is_bg = is_bg | second_mask
+            result[second_mask] = 0
+            print(f"[bg] Second pass — masked {second_mask.sum()} additional near-white pixels")
         return Image.fromarray(result), is_bg, True
 
     pixels = np.array(image.convert("RGB"), dtype=np.uint8)
@@ -179,28 +208,38 @@ def flatten_background(
     result = pixels.copy()
     result[is_bg] = 0
     print(f"[bg] Masked {is_bg.sum()} background pixels")
+
+    if second_white_threshold is not None:
+        second_mask = _remove_white_background(result, second_white_threshold)
+        second_mask = second_mask & ~is_bg
+        if second_mask.any():
+            is_bg = is_bg | second_mask
+            result[second_mask] = 0
+            print(f"[bg] Second pass — masked {second_mask.sum()} additional near-white pixels")
+
     return Image.fromarray(result), is_bg, False
 
 
-def _downsample_mask(mask: np.ndarray, grid_size: int) -> np.ndarray:
-    """Downsample bool mask to grid_size×grid_size (majority vote via BOX)."""
+def _downsample_mask(mask: np.ndarray, grid_width: int, grid_height: int) -> np.ndarray:
+    """Downsample bool mask to grid_width×grid_height (majority vote via BOX)."""
     mask_img = Image.fromarray(mask.astype(np.uint8) * 255)
-    small = mask_img.resize((grid_size, grid_size), Image.BOX)
+    small = mask_img.resize((grid_width, grid_height), Image.BOX)
     return np.array(small) > 127
 
 
 def pixelate(
     image: Image.Image,
-    grid_size: int,
+    grid_width: int,
+    grid_height: int,
     palette: Palette,
     resample: str = "nearest",
     preflattened: tuple[Image.Image, np.ndarray] | None = None,
     lock_background: bool = False,
 ) -> PixelGrid:
-    """Downsample image to grid_size×grid_size and snap each pixel to palette.
+    """Downsample image to grid_width×grid_height and snap each pixel to palette.
 
     If preflattened=(flat_image, bg_mask) is provided, uses those directly
-    instead of re-running background removal (avoids double BFS from main.py).
+    instead of re-running background removal.
     """
     locked = None
 
@@ -214,16 +253,15 @@ def pixelate(
             bg_mask = bg_mask[y1:y2 + 1, x1:x2 + 1]
             print(f"[bg] Cropped to foreground bounding box: {img.size[0]}×{img.size[1]} px")
         if lock_background:
-            locked = _downsample_mask(bg_mask, grid_size)
+            locked = _downsample_mask(bg_mask, grid_width, grid_height)
     else:
         img = image.convert("RGB")
 
     mode = _RESAMPLE_MODES.get(resample, Image.NEAREST)
-    small = np.array(img.resize((grid_size, grid_size), mode), dtype=np.float32)
+    small = np.array(img.resize((grid_width, grid_height), mode), dtype=np.float32)
 
-    # Vectorised nearest-palette lookup: (N,3) vs (K,3) → argmin distance
     pixels_flat = small.reshape(-1, 3)
     dists = np.sum((palette._rgb[None, :, :] - pixels_flat[:, None, :]) ** 2, axis=2)
-    data = np.argmin(dists, axis=1).reshape(grid_size, grid_size).astype(np.int32)
+    data = np.argmin(dists, axis=1).reshape(grid_height, grid_width).astype(np.int32)
 
     return PixelGrid(data, palette, locked=locked)
