@@ -68,47 +68,48 @@ def best_n_from_palette(
     pixels_rgb: np.ndarray,
     master: "Palette",
     n: int,
-    min_distance: float = 30.0,
+    min_pixel_fraction: float = 0.005,
 ) -> "Palette":
-    """Return a new Palette with the n most-frequent master colors in the image.
+    """Select the n most diverse master palette colors that are present in the image.
 
-    Each pixel is snapped to the nearest master palette entry (L2 RGB distance),
-    then candidates are ranked by frequency. Colors too close to an already-selected
-    color (L2 < min_distance) are skipped in favor of more distinct ones. If not
-    enough distinct colors exist to fill n slots, near-duplicates are admitted as
-    a fallback so the count is always honored.
+    Step 1 — filter: snap every pixel to its nearest master color and discard master
+    colors below min_pixel_fraction of total pixels (default 0.5%). This removes
+    colors that barely appear while keeping genuine minority colors like a red iris.
+
+    Step 2 — farthest-first traversal: start from the most frequent qualifying color,
+    then repeatedly pick the qualifying color farthest (in RGB L2) from any already
+    selected. This maximizes color diversity rather than pixel coverage, so two similar
+    purples never both win over a distinctly different red.
     """
     pixels = pixels_rgb.reshape(-1, 3).astype(np.float32)
-    dists = np.sum((master._rgb[None, :, :] - pixels[:, None, :]) ** 2, axis=2)
-    assignments = np.argmin(dists, axis=1)
-    counts = np.bincount(assignments, minlength=len(master.names))
+    k = len(master.names)
+    total = len(pixels)
 
-    # Rank all entries by frequency, most frequent first
-    ranked = np.argsort(counts)[::-1]
+    # Snap each pixel to nearest master entry
+    dists_sq = np.sum((master._rgb[None, :, :] - pixels[:, None, :]) ** 2, axis=2)
+    assignments = np.argmin(dists_sq, axis=1)
+    counts = np.bincount(assignments, minlength=k)
 
-    selected: list[int] = []
-    deferred: list[int] = []  # too-close entries, admitted only if needed
+    # Filter to colors with meaningful presence; relax threshold if too few qualify
+    threshold = max(1, int(total * min_pixel_fraction))
+    present = np.where(counts >= threshold)[0]
+    if len(present) < n:
+        present = np.where(counts > 0)[0]
 
-    for idx in ranked:
-        if counts[idx] == 0:
-            break
-        rgb = master._rgb[idx]
-        too_close = any(
-            float(np.sqrt(np.sum((rgb - master._rgb[s]) ** 2))) < min_distance
-            for s in selected
-        )
-        if too_close:
-            deferred.append(idx)
-        else:
-            selected.append(idx)
-        if len(selected) == n:
-            break
+    # Farthest-first: seed with most frequent qualifying color
+    seed = present[int(np.argmax(counts[present]))]
+    selected = [seed]
+    remaining = list(present[present != seed])
 
-    # Fill remaining slots from deferred (near-duplicates) if we came up short
-    for idx in deferred:
-        if len(selected) == n:
-            break
-        selected.append(idx)
+    while len(selected) < n and remaining:
+        sel_rgb = master._rgb[selected]                                      # (S, 3)
+        cand_rgb = master._rgb[remaining]                                    # (C, 3)
+        pairwise = np.sqrt(
+            np.sum((cand_rgb[:, None, :] - sel_rgb[None, :, :]) ** 2, axis=2)
+        )                                                                     # (C, S)
+        min_dists = pairwise.min(axis=1)                                     # (C,)
+        best_local = int(np.argmax(min_dists))
+        selected.append(remaining.pop(best_local))
 
     named = {master.names[i]: master.hex_of(i) for i in selected}
     return Palette(named)
